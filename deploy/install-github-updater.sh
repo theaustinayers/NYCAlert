@@ -65,6 +65,7 @@ chmod 0600 "${UPDATER_KNOWN_HOSTS}"
 install -o root -g root -m 0755 deploy/nyc-alert-update.sh "${UPDATER_HELPER}"
 install -d -o root -g "${SERVICE_USER}" -m 0750 /var/lib/nyc-alert-updater
 install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${DATA_DIR}"
+install -d -o root -g root -m 0700 /var/backups/nyc-alert-bot
 
 cat > "${UPDATER_UNIT}" <<UNIT
 [Unit]

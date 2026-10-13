@@ -226,6 +226,7 @@ fi
 chown root:root "${UPDATER_KNOWN_HOSTS}"
 chmod 0600 "${UPDATER_KNOWN_HOSTS}"
 install -o root -g root -m 0755 deploy/nyc-alert-update.sh "${UPDATER_HELPER}"
+install -d -o root -g root -m 0700 /var/backups/nyc-alert-bot
 cat > "${UPDATER_UNIT}" <<UNIT
 [Unit]
 Description=Safely update NYC Alert from private GitHub main
