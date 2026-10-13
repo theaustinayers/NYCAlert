@@ -204,7 +204,7 @@ WantedBy=multi-user.target
 UNIT
 chmod 0644 "${UNIT_FILE}"
 
-# The admin update action can only start this fixed root-owned service through sudo.
+# The bot can only create a marker watched by this fixed root-owned update service.
 UPDATER_DIR="/etc/nyc-alert-updater"
 UPDATER_KEY="${UPDATER_DIR}/deploy_key"
 UPDATER_KNOWN_HOSTS="${UPDATER_DIR}/known_hosts"

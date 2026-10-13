@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/opt/nyc-alert-bot}"
 DATA_DIR="${DATA_DIR:-/var/lib/nyc-alert-bot}"
+ENV_FILE="/etc/nyc-alert-bot.env"
 SERVICE_USER="nyc-alert"
 UPDATER_DIR="/etc/nyc-alert-updater"
 UPDATER_KEY="${UPDATER_DIR}/deploy_key"
@@ -22,6 +23,15 @@ fi
 if ! systemctl cat nyc-alert-bot.service >/dev/null 2>&1; then
   echo 'nyc-alert-bot.service was not found.' >&2
   exit 1
+fi
+unit_data_dir="$(systemctl show nyc-alert-bot.service --property=Environment --value | tr ' ' '\n' | sed -n 's/^DATA_DIR=//p' | tail -n 1)"
+if [[ -n "${unit_data_dir}" ]]; then
+  DATA_DIR="${unit_data_dir}"
+elif [[ -f "${ENV_FILE}" ]]; then
+  configured_data_dir="$(awk -F= '$1 == "DATA_DIR" { value=substr($0, index($0, "=")+1); gsub(/^[[:space:]\"]+|[[:space:]\"]+$/, "", value); print value }' "${ENV_FILE}" | tail -n 1)"
+  if [[ -n "${configured_data_dir}" && "${configured_data_dir}" != "./data" ]]; then
+    if [[ "${configured_data_dir}" == /* ]]; then DATA_DIR="${configured_data_dir}"; else DATA_DIR="${APP_DIR}/${configured_data_dir}"; fi
+  fi
 fi
 if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
   echo "Service account ${SERVICE_USER} was not found." >&2
@@ -81,7 +91,7 @@ cat > "${UPDATER_PATH}" <<'PATHUNIT'
 Description=Watch for authorized NYC Alert GitHub update requests
 
 [Path]
-PathExists=/var/lib/nyc-alert-bot/update-request
+PathExists=${DATA_DIR}/update-request
 Unit=nyc-alert-updater.service
 
 [Install]
