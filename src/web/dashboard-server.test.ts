@@ -270,4 +270,31 @@ describe('DashboardServer account routes', () => {
       assert.ok(csp.includes(`'nonce-${nonce}'`));
     } finally { await server.stop(); }
   });
+
+  it('renders incident-specific Open Graph and Twitter metadata before client JavaScript runs', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const dashboardStore = new DashboardStore(false);
+    const incident = await dashboardStore.publish({
+      title: 'Alarm', headline: 'Reported Airport Valve Alarm', summary: 'Automatic valve alarm reported; no fire reported.',
+      occurredAt: new Date(), agency: 'FDNY', borough: 'Queens', category: 'newsworthy',
+      location: '407 John F. Kennedy Airport', confidence: 0.9, newsworthinessScore: 2
+    });
+    const server = new DashboardServer(dashboardStore, port, '127.0.0.1', undefined, undefined, {
+      publicUrl: 'https://nycalert.ai', trustProxy: false, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@nycalert.ai'
+    });
+    await server.start();
+    try {
+      const response = await fetch(`${origin}/incident/${incident.id}`);
+      assert.equal(response.status, 200);
+      const html = await response.text();
+      assert.match(html, /<title>Reported Airport Valve Alarm — NYC Alert<\/title>/);
+      assert.match(html, /property="og:title" content="Reported Airport Valve Alarm"/);
+      assert.match(html, /property="og:description" content="Automatic valve alarm reported; no fire reported\. \| 407 John F\. Kennedy Airport \| FDNY · Queens"/);
+      assert.match(html, new RegExp(`property="og:url" content="https://nycalert\\.ai/incident/${incident.id}"`));
+      assert.match(html, /property="og:image" content="https:\/\/nycalert\.ai\/logo\.svg"/);
+      assert.match(html, /name="twitter:card" content="summary_large_image"/);
+      assert.match(html, /rel="canonical" href="https:\/\/nycalert\.ai\/incident\//);
+    } finally { await server.stop(); }
+  });
 });

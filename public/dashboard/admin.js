@@ -1,6 +1,6 @@
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
-const state = { section: 'overview', session: null, users: [], incidents: [], pending: [], webhooks: [], learningEvents: [], learningStatus: null };
+const state = { section: 'users', session: null, users: [], incidents: [], pending: [], webhooks: [], learningEvents: [], learningStatus: null };
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const formatTime = (value) => {
   const date = new Date(value);
@@ -50,7 +50,8 @@ async function init() {
     return;
   }
   $('#admin-session-label').textContent = state.session.account?.email || 'Administrator session';
-  await Promise.all([loadOverview(), loadUsers(), loadIncidents(), loadWebhooks(), loadAnalytics(), loadLearningLog()]);
+  activateSection('users');
+  await Promise.all([loadUsers(), loadAdministrators(), loadIncidents(), loadWebhooks(), loadAnalytics(), loadLearningLog()]);
 }
 
 function wireNavigation() {
@@ -67,27 +68,25 @@ function activateSection(name) {
     section.hidden = !active;
   });
   const labels = {
-    overview: ['CONTROL ROOM', 'Overview', 'Current service snapshot and administrative actions.'],
     users: ['ACCOUNT MANAGEMENT', 'Users', 'Search registrations, review requested access, and manage privileged accounts.'],
     incidents: ['EDITORIAL CONTROL', 'Incidents', 'Manage current incident cards and privately held location-correction reports.'],
-    discord: ['INTEGRATIONS', 'Discord & webhooks', 'Review assigned destinations. Stored webhook targets are not dispatched yet.'],
+    webhooks: ['INTEGRATIONS', 'Webhooks', 'Review assigned destinations. Stored webhook targets are not dispatched yet.'],
     analytics: ['SITE CONFIGURATION', 'Analytics', 'Configure consent-gated analytics IDs and search-engine verification tags.'],
-    learning: ['MODEL IMPROVEMENT', 'AI Learning Debugger', 'Inspect transcript-only workflow traces and decision values.']
+    settings: ['SYSTEM SETTINGS', 'Settings', 'Manage staff roles and inspect transcript-only learning workflow data.']
   };
-  const [eyebrow, title, description] = labels[name] || labels.overview;
+  const [eyebrow, title, description] = labels[name] || labels.users;
   $('#section-eyebrow').textContent = eyebrow;
   $('#section-title').textContent = title;
   $('#section-description').textContent = description;
-  $('#refresh-current').hidden = name === 'analytics';
+  $('#refresh-current').hidden = false;
 }
 
 async function refreshCurrent() {
-  if (state.section === 'overview') return loadOverview();
   if (state.section === 'users') return Promise.all([loadUsers(), loadAdministrators()]);
   if (state.section === 'incidents') return loadIncidents();
-  if (state.section === 'discord') return loadWebhooks();
+  if (state.section === 'webhooks') return loadWebhooks();
   if (state.section === 'analytics') return loadAnalytics();
-  return loadLearningLog();
+  return Promise.all([loadAdministrators(), loadLearningLog()]);
 }
 
 async function loadLearningLog() {
@@ -175,18 +174,6 @@ async function clearLearningLog() {
   } catch (error) { showMessage(error.message, true); }
 }
 
-async function loadOverview() {
-  try {
-    const data = await api('/api/admin/overview');
-    $('#overview-incidents').textContent = data.incidents;
-    $('#overview-users').textContent = data.users;
-    $('#overview-pending-users').textContent = data.pendingUsers;
-    $('#overview-pending-incidents').textContent = data.pendingIncidents;
-    $('#pending-user-count').textContent = data.pendingUsers;
-    $('#overview-incidents').title = data.dataWindow;
-  } catch (error) { showMessage(error.message, true); }
-}
-
 async function loadUsers() {
   try {
     const params = new URLSearchParams();
@@ -198,7 +185,7 @@ async function loadUsers() {
     state.users = data.accounts || [];
     renderUsers();
     await Promise.all([loadAdministrators(), populateWebhookAccounts()]);
-    void loadOverview();
+    $('#pending-user-count').textContent = state.users.filter((user) => user.status === 'pending-approval' || user.status === 'pending-verification').length;
   } catch (error) { $('#users-table').innerHTML = `<tr><td colspan="6">${escapeHtml(error.message)}</td></tr>`; }
 }
 
@@ -284,7 +271,8 @@ function renderIncidents() {
   $$('[data-delete-incident]').forEach((button) => button.addEventListener('click', () => deleteIncident(button.dataset.deleteIncident)));
   $('#pending-incident-count').textContent = state.pending.length;
   const pendingList = $('#pending-incidents-list');
-  pendingList.innerHTML = state.pending.length ? state.pending.map((pending) => `<article class="admin-card"><div class="admin-card-meta"><span class="admin-badge pending-approval">PRIVATE · PENDING</span><span>${escapeHtml(pending.agency)} · ${escapeHtml(pending.borough)}</span><span>Expires ${escapeHtml(formatTime(pending.expiresAt))}</span></div><h3>${escapeHtml(pending.eventType || 'Unlocated report')}</h3><p>${escapeHtml(pending.summary)}</p>${pending.location ? `<p>Unverified location: ${escapeHtml(pending.location)}</p>` : '<p>No confidently geocoded address. Not shown publicly.</p>'}<div class="admin-card-actions"><button class="admin-icon-button danger" data-discard-pending="${escapeHtml(pending.id)}">Discard pending</button></div></article>`).join('') : '<p class="admin-muted">No pending reports. Queue contents expire and are lost on service restart.</p>';
+  pendingList.innerHTML = state.pending.length ? state.pending.map((pending) => `<article class="admin-card"><div class="admin-card-meta"><span class="admin-badge pending-approval">PRIVATE · PENDING</span><span>${escapeHtml(pending.agency)} · ${escapeHtml(pending.borough)}</span><span>Expires ${escapeHtml(formatTime(pending.expiresAt))}</span></div><h3>${escapeHtml(pending.eventType || 'Unlocated report')}</h3><p>${escapeHtml(pending.summary)}</p>${pending.location ? `<p>Unverified location: ${escapeHtml(pending.location)}</p>` : '<p>No confidently geocoded address. Not shown publicly.</p>'}<div class="admin-card-actions"><button class="admin-icon-button approve" data-allow-pending="${escapeHtml(pending.id)}">Allow Pending</button><button class="admin-icon-button danger" data-discard-pending="${escapeHtml(pending.id)}">Discard pending</button></div></article>`).join('') : '<p class="admin-muted">No pending reports. Queue contents expire and are lost on service restart.</p>';
+  $$('[data-allow-pending]').forEach((button) => button.addEventListener('click', () => allowPending(button.dataset.allowPending)));
   $$('[data-discard-pending]').forEach((button) => button.addEventListener('click', () => discardPending(button.dataset.discardPending)));
 }
 
@@ -328,6 +316,15 @@ async function discardPending(id) {
   if (!confirm('Discard this private pending report?')) return;
   try { await api(`/api/admin/incidents/pending/${encodeURIComponent(id)}`, { method: 'DELETE' }); showMessage('Pending report discarded.'); await loadIncidents(); }
   catch (error) { showMessage(error.message, true); }
+}
+
+async function allowPending(id) {
+  if (!confirm('Allow this report onto the public board without a verified location? It will not receive a map pin until a location is confirmed.')) return;
+  try {
+    const result = await api(`/api/admin/incidents/pending/${encodeURIComponent(id)}/allow`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    showMessage(`Pending report published as ${result.incidentId}; location remains unverified.`);
+    await loadIncidents();
+  } catch (error) { showMessage(error.message, true); }
 }
 
 async function populateWebhookAccounts() {

@@ -202,13 +202,18 @@ export class DashboardServer {
 
         const incidentPageMatch = /^\/incident\/([0-9a-f-]{36})$/i.exec(url.pathname);
         if (incidentPageMatch) {
+          const incident = this.store.getIncident(incidentPageMatch[1]!);
           response.writeHead(200, {
             'Content-Type': 'text/html; charset=utf-8',
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff'
           });
           if (request.method === 'HEAD') response.end();
-          else createReadStream(join(root, 'incident.html')).pipe(response);
+          else {
+            const html = await readFile(join(root, 'incident.html'), 'utf8');
+            const publicUrl = this.authConfig?.publicUrl ?? url.origin;
+            response.end(renderIncidentShareHtml(html, incident, incidentPageMatch[1]!, publicUrl, cspNonce, this.siteSettings?.get() ?? {}));
+          }
           return;
         }
 
@@ -908,6 +913,47 @@ function validateWebhookUrl(value: string): string | undefined {
     if (!host.includes('.') || host.split('.').some((label) => !label || label.startsWith('-') || label.endsWith('-'))) return undefined;
     return url.toString();
   } catch { return undefined; }
+}
+
+function renderIncidentShareHtml(
+  html: string,
+  incident: ReturnType<DashboardStore['getIncident']>,
+  incidentId: string,
+  publicUrl: string,
+  nonce: string,
+  settings: SiteSettings
+): string {
+  const canonicalUrl = new URL(`/incident/${encodeURIComponent(incidentId)}`, publicUrl).toString();
+  const headline = incident?.title.split(' | ')[0] || 'NYC Alert Incident Report';
+  const description = incident
+    ? [incident.summary, incident.location, `${incident.agency} · ${incident.borough}`].filter(Boolean).join(' | ').slice(0, 280)
+    : 'AI-assisted radio-reported incident details and updates. Verify independently.';
+  const imageUrl = new URL('/logo.svg', publicUrl).toString();
+  const escapeAttribute = (value: string): string => value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]!);
+  let page = html
+    .replace(/<title>[\s\S]*?<\/title>/i, '')
+    .replace(/<meta\b[^>]*(?:property|name)=["'](?:og:(?:title|description|type|url|image|image:alt|image:type)|twitter:(?:card|title|description|image)|description)["'][^>]*>\s*/gi, '')
+    .replace(/<link\b[^>]*rel=["']canonical["'][^>]*>\s*/gi, '');
+  const metadata = [
+    `<title>${escapeAttribute(headline)} — NYC Alert</title>`,
+    `<meta name="description" content="${escapeAttribute(description)}">`,
+    '<meta property="og:type" content="article">',
+    `<meta property="og:title" content="${escapeAttribute(headline)}">`,
+    `<meta property="og:description" content="${escapeAttribute(description)}">`,
+    `<meta property="og:url" content="${escapeAttribute(canonicalUrl)}">`,
+    `<meta property="og:image" content="${escapeAttribute(imageUrl)}">`,
+    `<meta property="og:image:alt" content="NYC Alert — ${escapeAttribute(headline)}">`,
+    '<meta property="og:image:type" content="image/svg+xml">',
+    '<meta name="twitter:card" content="summary_large_image">',
+    `<meta name="twitter:title" content="${escapeAttribute(headline)}">`,
+    `<meta name="twitter:description" content="${escapeAttribute(description)}">`,
+    `<meta name="twitter:image" content="${escapeAttribute(imageUrl)}">`,
+    `<link rel="canonical" href="${escapeAttribute(canonicalUrl)}">`
+  ].join('\n  ');
+  page = page.replace('</head>', `  ${metadata}\n</head>`);
+  return injectVerificationTags(page, settings, nonce);
 }
 
 function applyScriptNonce(code: string, nonce: string): string {
