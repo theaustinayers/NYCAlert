@@ -1,0 +1,24 @@
+[Unit]
+Description=NYC public safety Discord alert bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nyc-alert
+Group=nyc-alert
+WorkingDirectory=/opt/nyc-alert-bot
+EnvironmentFile=/etc/nyc-alert-bot/nyc-alert-bot.env
+ExecStart=/usr/bin/node /opt/nyc-alert-bot/dist/index.js
+Restart=on-failure
+RestartSec=5
+StateDirectory=nyc-alert-bot
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nyc-alert-bot
+
+[Install]
+WantedBy=multi-user.target

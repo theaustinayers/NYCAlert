@@ -1,0 +1,34 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Bot: test",
+      "type": "shell",
+      "command": "npm.cmd",
+      "args": ["run", "test"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Bot: typecheck",
+      "type": "shell",
+      "command": "npm.cmd",
+      "args": ["run", "typecheck"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Bot: build",
+      "type": "shell",
+      "command": "npm.cmd",
+      "args": ["run", "build"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Bot: verify all",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Bot: test", "Bot: typecheck", "Bot: build"],
+      "problemMatcher": [],
+      "group": "test"
+    }
+  ]
+}

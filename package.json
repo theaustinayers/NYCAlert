@@ -1,0 +1,33 @@
+{
+  "name": "nyc-public-safety-alerts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Discord alert bot foundation for authorized NYC FDNY/NYPD Broadcastify feeds",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && node dist/index.js",
+    "test": "tsx --test src/**/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.4.7",
+    "leaflet": "^1.9.4",
+    "nodemailer": "^10.1.0",
+    "openai": "^5.12.2",
+    "pino": "^9.7.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.22",
+    "@types/node": "^22.15.30",
+    "@types/nodemailer": "^8.0.2",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 190" role="img" aria-labelledby="title desc">
+  <title id="title">FDNY AI Alerts NYC</title>
+  <desc id="desc">New York skyline framed by a red fire service shield, with FDNY AI Alerts NYC lettering.</desc>
+  <g transform="translate(8 2)">
+    <path d="M175 130 155 100c-12-19-11-39-7-58l4-24c38 9 69 6 99-10 17-9 29-16 44-19v147" fill="none" stroke="#be2836" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M545 130 565 100c12-19 11-39 7-58l-4-24c-38 9-69 6-99-10-17-9-29-16-44-19v147" fill="none" stroke="#be2836" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M176 125c30 5 55-2 80-15 16-8 26-14 39-16 13 2 23 8 39 16 25 13 50 20 80 15" fill="none" stroke="#be2836" stroke-width="4" stroke-linecap="round"/>
+    <path d="M130 139h65m330 0h65" fill="none" stroke="#7398b7" stroke-width="2"/>
+    <path d="M239 126h15V91h14v35h10V75h17v51h11V58h16v68h10V38h15v88h15V22h15v104h10V4h12v122h12V45h15v81h13V67h16v59h11V82h16v44h12V95h14v31h15v12H205v-12h34zm-91 0h12v-23h12v23m-33 0h6v-13h12v13" fill="#7697b4" opacity=".74"/>
+    <path d="M367 5v120m-8-2 8 13 8-13m-13-84h10m-12 20h14m-17 20h20m-21 20h22" fill="none" stroke="#526f89" stroke-width="2"/>
+    <path d="M230 148h260" stroke="#7398b7" stroke-width="1.5"/>
+    <circle cx="226" cy="148" r="3" fill="#7398b7"/><circle cx="494" cy="148" r="3" fill="#7398b7"/>
+  </g>
+  <text x="360" y="168" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="35" letter-spacing="3" font-weight="700" fill="#142b4c">FDNY <tspan fill="#bd2b37">AI</tspan> ALERTS</text>
+  <text x="360" y="187" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="12" letter-spacing="8" font-weight="600" fill="#142b4c">N Y C</text>
+</svg>

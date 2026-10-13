@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080d13">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Admin Console — NYC Alert</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/activity.css">
+  <link rel="stylesheet" href="/admin.css">
+  <link rel="stylesheet" href="/admin-learning.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body class="admin-page">
+  <header class="admin-topbar">
+    <a class="admin-brand" href="/" aria-label="NYC Alert public dashboard"><img src="/logo.svg" alt="NYC Alert"><span><b>NYC ALERT</b><small>ADMIN CONSOLE</small></span></a>
+    <div class="admin-topbar-right"><span class="admin-session-label" id="admin-session-label">Checking administrator session…</span><a class="admin-public-link" href="/">View public site ↗</a><button class="admin-logout" id="admin-logout" type="button">Log out</button></div>
+  </header>
+  <div class="admin-layout">
+    <aside class="admin-sidebar">
+      <span class="admin-nav-label">WORKSPACE</span>
+      <nav aria-label="Admin sections">
+        <button class="admin-nav-item active" data-section="overview" type="button"><span>▦</span>Overview</button>
+        <button class="admin-nav-item" data-section="users" type="button"><span>♙</span>Users <i id="pending-user-count">—</i></button>
+        <button class="admin-nav-item" data-section="incidents" type="button"><span>⌁</span>Incidents</button>
+        <button class="admin-nav-item" data-section="discord" type="button"><span>◉</span>Discord & webhooks</button>
+        <button class="admin-nav-item" data-section="analytics" type="button"><span>⌗</span>Analytics</button>
+        <button class="admin-nav-item" data-section="learning" type="button"><span>⌁</span>AI Learning Debugger</button>
+      </nav>
+      <div class="admin-sidebar-foot"><span class="admin-live-dot"></span> ADMIN SESSION ACTIVE<br><small>Privileged changes are logged</small></div>
+    </aside>
+    <main class="admin-main">
+      <div class="admin-page-heading"><div><span class="admin-eyebrow" id="section-eyebrow">CONTROL ROOM</span><h1 id="section-title">Overview</h1><p id="section-description">Current service snapshot and administrative actions.</p></div><button class="admin-refresh" id="refresh-current" type="button">↻ Refresh</button></div>
+      <div class="admin-alert" id="admin-alert" role="status" aria-live="polite" hidden></div>
+      <section class="admin-section active" id="section-overview">
+        <div class="admin-stat-grid">
+          <article class="admin-stat"><span>LIVE INCIDENT RECORDS</span><strong id="overview-incidents">—</strong><small>Current process memory</small></article>
+          <article class="admin-stat"><span>REGISTERED USERS</span><strong id="overview-users">—</strong><small>Persistent accounts</small></article>
+          <article class="admin-stat"><span>PENDING APPROVAL</span><strong id="overview-pending-users">—</strong><small>Verified or awaiting verification</small></article>
+          <article class="admin-stat"><span>UNLOCATED QUEUE</span><strong id="overview-pending-incidents">—</strong><small>Expires after 30 minutes</small></article>
+        </div>
+        <div class="admin-notice"><strong>Retention note</strong><p>Incident history and pending reports are held in memory and reset when the service restarts. Deleting an incident here removes it from the site/map, but cannot recall a Discord alert already sent.</p></div>
+        <div class="admin-panel"><div class="admin-panel-head"><div><span class="admin-eyebrow">QUICK ACTION</span><h2>Review the queue</h2></div><button class="admin-primary" data-open-section="users" type="button">Review users</button></div><p>Approve verified Buff and News Media accounts, inspect pending incident reports, and manage integration settings.</p></div>
+      </section>
+      <section class="admin-section" id="section-users" hidden>
+        <div class="admin-toolbar"><label class="admin-search">Search users<input id="user-search" type="search" placeholder="Name, email, audience…"></label><label class="admin-select">STATUS<select id="user-status"><option value="all">All users</option><option value="pending-approval">Pending approval</option><option value="pending-verification">Needs verification</option><option value="approved">Approved</option><option value="suspended">Suspended</option></select></label><button class="admin-secondary" id="refresh-users" type="button">Refresh list</button></div>
+        <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>USER</th><th>REQUESTED ACCESS</th><th>STATUS</th><th>VERIFIED</th><th>CREATED</th><th>ACTIONS</th></tr></thead><tbody id="users-table"><tr><td colspan="6">Loading users…</td></tr></tbody></table></div>
+        <div class="admin-subpanel"><h2>Administrators</h2><p>Invitations require verified email and a unique 16-character password.</p><form id="admin-invite-form" class="admin-invite-form"><input name="firstName" placeholder="First name" maxlength="80" required><input name="lastName" placeholder="Last name" maxlength="80" required><input name="email" type="email" placeholder="Email address" maxlength="254" required><button class="admin-primary" type="submit">Invite admin</button></form><div id="administrators-list" class="admin-card-list"></div></div>
+      </section>
+      <section class="admin-section" id="section-incidents" hidden>
+        <div class="admin-toolbar"><label class="admin-search">Search incidents<input id="incident-search" type="search" placeholder="Title, location, agency…"></label><button class="admin-primary" id="create-incident" type="button">＋ Add incident</button><button class="admin-secondary" id="refresh-incidents" type="button">Refresh</button></div>
+        <div class="admin-panel-head admin-queue-heading"><div><span class="admin-eyebrow">EDITORIAL QUEUE</span><h2>Pending / unlocated reports <span class="admin-count" id="pending-incident-count">0</span></h2><p>Private, temporary reports are not public until confidently matched.</p></div></div>
+        <div id="pending-incidents-list" class="admin-card-list"><p class="admin-muted">Loading pending queue…</p></div>
+        <div class="admin-panel-head admin-queue-heading"><div><span class="admin-eyebrow">PUBLISHED BOARD</span><h2>Incidents</h2></div></div>
+        <div id="incidents-list" class="admin-incident-list"><p class="admin-muted">Loading incidents…</p></div>
+      </section>
+      <section class="admin-section" id="section-discord" hidden>
+        <div class="admin-notice"><strong>Webhook delivery status</strong><p>Webhook URLs are stored and assigned to accounts. Outbound webhook delivery is not implemented or active yet.</p></div>
+        <div class="admin-panel-head"><div><span class="admin-eyebrow">ASSIGNED DESTINATIONS</span><h2>Discord & webhooks</h2></div><button class="admin-secondary" id="refresh-webhooks" type="button">Refresh</button></div>
+        <form id="webhook-form" class="admin-form-grid"><label>ASSIGN TO APPROVED USER<select name="accountId" id="webhook-account" required></select></label><label>DISPLAY NAME<input name="name" maxlength="80" required placeholder="FDNY Brooklyn alerts"></label><label class="wide">HTTPS WEBHOOK URL<input name="url" type="url" placeholder="https://…" required></label><fieldset class="admin-borough-field"><legend>BOROUGHS</legend><label><input type="checkbox" name="boroughs" value="Manhattan">Manhattan</label><label><input type="checkbox" name="boroughs" value="Bronx">Bronx</label><label><input type="checkbox" name="boroughs" value="Queens">Queens</label><label><input type="checkbox" name="boroughs" value="Brooklyn">Brooklyn</label><label><input type="checkbox" name="boroughs" value="Staten Island">Staten Island</label><label><input type="checkbox" name="boroughs" value="all">All boroughs</label></fieldset><button class="admin-primary" type="submit">Save webhook target</button></form>
+        <div id="webhooks-list" class="admin-card-list"><p class="admin-muted">Loading webhook assignments…</p></div>
+      </section>
+      <section class="admin-section" id="section-analytics" hidden>
+        <div class="admin-notice"><strong>Privacy by default</strong><p>Google Analytics and Meta Pixel run only after a visitor explicitly accepts analytics on the public site. Verification tokens are published as safe HTML meta tags in the page header.</p></div>
+        <form id="analytics-form" class="admin-analytics-form">
+          <div class="admin-form-section-title"><span class="admin-eyebrow">TRAFFIC ANALYTICS</span><h2>Optional tracking IDs</h2></div>
+          <label>GOOGLE ANALYTICS 4 ID<input name="googleAnalyticsId" placeholder="G-XXXXXXXXXX" autocomplete="off"><small>Format: G- followed by the measurement ID.</small></label>
+          <label>META PIXEL ID<input name="metaPixelId" inputmode="numeric" placeholder="123456789012345" autocomplete="off"><small>Digits only. Loads only after analytics consent.</small></label>
+          <div class="admin-form-section-title"><span class="admin-eyebrow">SITE OWNERSHIP</span><h2>Search-engine verification</h2></div>
+          <label>GOOGLE SITE VERIFICATION TOKEN<input name="googleSiteVerification" maxlength="200" autocomplete="off"><small>Token from Google Search Console HTML tag.</small></label>
+          <label>BING WEBMASTER VERIFICATION TOKEN<input name="bingSiteVerification" maxlength="200" autocomplete="off"><small>Token from Bing Webmaster Tools HTML tag.</small></label>
+          <div class="admin-form-section-title"><span class="admin-eyebrow">ADVERTISING & VERIFICATION</span><h2>Above Header Code</h2></div>
+          <label class="wide">HTML SNIPPETS TO INSERT IN PAGE HEAD<textarea name="aboveHeaderCode" maxlength="12000" rows="8" placeholder="<!-- Example: approved AdSense loader or provider verification tag -->"></textarea><small>Supports script, meta, and link tags. External URLs must use HTTPS. Inline scripts receive a per-response CSP nonce. Iframes, forms, style blocks, event-handler attributes, and unsafe URLs are rejected. Only paste code from providers you trust; it executes on public pages.</small></label>
+          <div class="admin-analytics-actions"><button class="admin-primary" type="submit">Save analytics settings</button><button class="admin-secondary" id="clear-analytics" type="button">Clear settings</button><span id="analytics-state" class="admin-muted"></span></div>
+        </form>
+        <div class="admin-notice"><strong>Site analytics history</strong><p>Durable visitor history and historical incident trends are not currently collected. This panel configures opt-in Google/Meta tracking and verification tags; it does not create a local visitor database.</p></div>
+      </section>
+      <section class="admin-section" id="section-learning" hidden>
+        <div class="admin-notice"><strong>Transcript-only audit log</strong><p>This feature stores radio transcript text and AI/workflow decisions as JSONL. It never stores or copies audio files. Radio transcripts can contain sensitive personal or operational information: restrict server access, use an approved retention period, and do not publish or upload raw logs to public services. Clearing removes data from the active log; filesystem snapshots or backups may still contain earlier copies.</p></div>
+        <div class="learning-log-toolbar"><div><span class="admin-eyebrow">CAPTURE STATUS</span><h2 id="learning-status-title">Loading logger status…</h2><p id="learning-status-detail" class="admin-muted"></p></div><div class="learning-log-actions"><button class="admin-secondary" id="refresh-learning" type="button">Refresh</button><button class="admin-primary" id="download-learning" type="button">Export learning data</button><button class="admin-icon-button danger" id="clear-learning" type="button">Clear learning data</button></div></div>
+        <label class="admin-search learning-search">Filter recent workflow records<input id="learning-search" type="search" placeholder="Call ID, transcript, location, outcome…"></label>
+        <div class="workflow-guide"><span>RECEIVED</span><b>→</b><span>TRANSCRIPTION</span><b>→</b><span>TRIAGE</span><b>→</b><span>GEOCODING</span><b>→</b><span>CORRELATION</span><b>→</b><span>PENDING / PUBLISH / UPDATE / SUPPRESS</span><b>→</b><span>DISCORD ROUTING</span></div>
+        <p class="admin-muted">Each radio call is linked by event ID and labeled as routine traffic, incident-classified, or unclassified until triage runs. The transcript is recorded once; subsequent rows append the path and decision fields. The JSONL file is stored privately under the configured DATA_DIR.</p>
+        <div id="learning-events" class="learning-event-list"><p class="admin-muted">Loading workflow records…</p></div>
+      </section>
+    </main>
+  </div>
+  <dialog id="incident-editor" class="admin-dialog"><form id="incident-form" method="dialog"><header><div><span class="admin-eyebrow">INCIDENT EDITOR</span><h2 id="incident-editor-title">Add incident</h2></div><button class="dialog-close" value="cancel" aria-label="Close">×</button></header><input type="hidden" name="id"><div class="admin-form-grid"><label>AI HEADLINE<input name="headline" maxlength="120" required></label><label>AGENCY<select name="agency"><option>FDNY</option><option>NYPD</option></select></label><label>BOROUGH<select name="borough"><option>Manhattan</option><option>Bronx</option><option>Queens</option><option>Brooklyn</option><option>Staten Island</option><option>Citywide</option></select></label><label>TYPE<select name="incidentType"><option>fire</option><option>medical</option><option>vehicle</option><option>police</option><option>other</option></select></label><label>CATEGORY<select name="category"><option>newsworthy</option><option>breaking</option><option>funny</option><option>weird_unique</option></select></label><label class="wide">ADDRESS<input name="location" maxlength="180"></label><label class="wide">SUMMARY<textarea name="summary" maxlength="700" rows="4" required></textarea></label><button class="admin-primary" id="save-incident" value="default" type="submit">Save incident</button></div></form></dialog>
+  <script src="/leaflet.js" defer></script>
+</body>
+</html>

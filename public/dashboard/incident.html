@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
+  <meta name="description" content="NYC Alert incident details and radio-reported updates.">
+  <meta property="og:title" content="NYC Alert — Incident Report">
+  <meta property="og:description" content="AI-assisted radio-reported incident details and updates. Verify independently.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://nycalert.ai/">
+  <link rel="canonical" href="https://nycalert.ai/">
+  <title>Incident — NYC Alert</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/activity.css">
+  <link rel="stylesheet" href="/incident.css">
+  <link rel="stylesheet" href="/leaflet.css">
+  <script src="/leaflet.js" defer></script>
+  <script src="/incident.js" defer></script>
+</head>
+<body>
+  <div class="incident-page-shell">
+    <header class="topbar incident-page-header">
+      <a class="brand" href="/" aria-label="NYC Alert home">
+        <img src="/logo.svg" alt="NYC Alert New York skyline logo" class="brand-logo">
+        <span class="brand-divider"></span><span class="brand-caption">NYC ALERT CONSOLE</span>
+      </a>
+      <div class="incident-ticker routine" id="incident-ticker" role="status" aria-live="polite"><span class="ticker-live-dot"></span><strong id="incident-ticker-label">INCIDENT:</strong><span id="incident-ticker-text">Loading incident…</span></div>
+      <a class="donate-button" href="https://buymeacoffee.com/nycalert" target="_blank" rel="noopener noreferrer">☕ <span>Donate</span></a>
+      <a class="invite-button" id="invite-discord" href="https://discord.com/oauth2/authorize?client_id=1559381336744136764&amp;permissions=8&amp;integration_type=0&amp;scope=bot" target="_blank" rel="noopener noreferrer">Invite Discord Bot</a>
+      <div class="incident-auth-actions"><a class="account-button" href="/?auth=login">Log in</a><a class="account-button account-button-primary" href="/?auth=register">Register</a></div>
+      <div class="topbar-right"><span class="system-state"><i></i><span>INCIDENT REPORT</span></span><span class="top-divider"></span><time id="clock">--:-- ET</time><span class="top-date" id="date-label">NEW YORK</span></div>
+    </header>
+    <main class="incident-page-content">
+      <a class="incident-back-link" href="/">← Back to NYC Alert</a>
+      <div id="incident-detail" aria-live="polite"><div class="incident-loading">Loading incident details…</div></div>
+      <p class="incident-page-disclaimer">AI-assisted radio reporting can be incomplete or inaccurate. Verify independently. Not an emergency dispatch service.</p>
+       <section class="analytics-consent" id="analytics-consent" aria-label="Optional analytics consent" hidden>
+         <div><strong>Help improve NYC Alert</strong>
+           <p>Optional Google or Meta analytics are off unless you choose to allow them.</p>
+         </div>
+         <div>
+           <button id="analytics-decline" type="button">Decline</button>
+           <button id="analytics-accept" type="button">Allow analytics</button>
+         </div>
+       </section>
+    </main>
+  </div>
+</body>
+</html>

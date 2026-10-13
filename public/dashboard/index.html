@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
+  <meta name="description" content="NYC Alert — AI-assisted New York City public safety incident notifications and dispatch updates.">
+  <link rel="canonical" href="https://nycalert.ai/">
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <meta property="og:title" content="NYC Alert — Public Safety Desk">
+  <meta property="og:description" content="AI-assisted New York City public safety incident notifications and dispatch updates.">
+  <meta property="og:url" content="https://nycalert.ai/">
+  <title>NYC Alert — Public Safety Desk</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/live.css">
+  <link rel="stylesheet" href="/live-overflow.css">
+  <link rel="stylesheet" href="/map.css">
+  <link rel="stylesheet" href="/activity.css">
+  <link rel="stylesheet" href="/leaflet.css">
+  <link rel="stylesheet" href="/mobile.css">
+  <script src="/leaflet.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="NYC Alert dashboard home">
+        <img src="/logo.svg" alt="NYC Alert New York skyline logo" class="brand-logo">
+        <span class="brand-divider"></span>
+        <span class="brand-caption">NYC ALERT CONSOLE</span>
+      </a>
+      <div class="incident-ticker" id="incident-ticker" role="status" aria-live="polite"><span class="ticker-live-dot"></span><strong id="incident-ticker-label">INCIDENT:</strong><span id="incident-ticker-text">Waiting for recent incidents…</span></div>
+      <a class="donate-button" href="https://buymeacoffee.com/nycalert" target="_blank" rel="noopener noreferrer" aria-label="Donate to NYC Alert on Buy Me a Coffee">☕ <span>Donate</span></a>
+      <a class="invite-button" id="invite-discord" href="https://discord.com/oauth2/authorize?client_id=1559381336744136764&amp;permissions=8&amp;integration_type=0&amp;scope=bot" target="_blank" rel="noopener noreferrer">Invite Discord Bot</a>
+      <div class="account-actions" id="account-actions"><button class="account-button" id="auth-login" type="button">Log in</button><button class="account-button account-button-primary" id="auth-register" type="button">Register</button><span id="signed-in-actions" hidden><span class="account-name" id="account-name"></span><a class="account-button" id="admin-dashboard" href="/admin" hidden>Admin dashboard</a><button class="account-button" id="auth-logout" type="button">Log out</button></span></div>
+      <div class="topbar-right"><span class="system-state"><i></i><span id="system-state">CONNECTING</span></span><span class="top-divider"></span><time id="clock">--:--:-- ET</time><span class="top-date" id="date-label">NEW YORK</span></div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <nav class="borough-tabs" id="borough-tabs" aria-label="Choose boroughs to show">
+          <span class="borough-filter-label">SHOW BOROUGHS</span>
+          <button class="borough-tab" type="button" data-borough="Manhattan" aria-pressed="true">Manhattan</button>
+          <button class="borough-tab" type="button" data-borough="Queens" aria-pressed="true">Queens</button>
+          <button class="borough-tab" type="button" data-borough="Brooklyn" aria-pressed="true">Brooklyn</button>
+          <button class="borough-tab" type="button" data-borough="Bronx" aria-pressed="true">Bronx</button>
+          <button class="borough-tab" type="button" data-borough="Staten Island" aria-pressed="true">Staten Island</button>
+          <button class="borough-reset active" id="borough-reset" type="button" aria-pressed="true">All On</button>
+        </nav>
+
+        <div class="audience-toggle" role="group" aria-label="Choose audience scoring view">
+          <span class="audience-toggle-label">AUDIENCE VIEW</span>
+          <button class="audience-tab active" id="audience-public" type="button" data-audience="public" aria-pressed="true">Public</button>
+          <button class="audience-tab" id="audience-buff" type="button" data-audience="buff" aria-pressed="false">Buff</button>
+          <button class="audience-tab" id="audience-news" type="button" data-audience="news" aria-pressed="false">News Media</button>
+        </div>
+
+        <div class="section-heading"><div><span class="eyebrow">MONITOR</span><h2>Audio Feeds</h2></div><span class="live-pill"><i></i> SOURCES</span></div>
+        <p class="side-note">Select a source to open its official Broadcastify player in a new tab.</p>
+        <div class="feed-list" id="feed-list"><div class="loading-line">Loading authorized sources…</div></div>
+        <div class="sidebar-foot"><span class="lock-icon">◆</span><span>Feed audio is served by Broadcastify. This dashboard does not relay live audio.</span></div>
+      </aside>
+
+      <section class="main-panel">
+        <div class="dashboard-center">
+        <div class="page-intro">
+          <div><div class="eyebrow" id="page-eyebrow">NYCALERT.AI · NEW YORK CITY</div><h1 id="page-title">NYC Alert<span class="accent-dot">.</span></h1><p id="page-description">Curated, AI-reviewed call highlights. Routine traffic stays off the board.</p></div>
+          <div class="intro-badge"><span class="pulse-ring"><i></i></span><div><b>AI TRIAGE</b><small>QUALIFIED EVENTS ONLY</small></div></div>
+        </div>
+
+        <div class="stats-row">
+          <article class="stat-card"><span class="stat-label">PUBLISHED INCIDENTS</span><strong id="incident-count">0</strong><span class="stat-caption">in current session</span></article>
+          <article class="stat-card"><span class="stat-label">ACTIVE AGENCIES</span><strong>02</strong><span class="stat-caption">FDNY · NYPD</span></article>
+          <article class="stat-card"><span class="stat-label">COVERAGE</span><strong>05<span class="stat-unit"> BOROUGHS</span></strong><span class="stat-caption">CITYWIDE REFERENCES INCLUDED</span></article>
+          <article class="stat-card stat-card-status"><span class="stat-label">PUBLIC FEED</span><strong><span class="status-dot"></span><span id="feed-status">STANDBY</span></strong><span class="stat-caption">AI-selected summaries only</span></article>
+        </div>
+
+        <section class="incident-map-panel" aria-labelledby="incident-map-title">
+          <div class="map-panel-heading"><div><span class="eyebrow">LAST 30 MINUTES</span><h2 id="incident-map-title">Incident Map</h2><p id="map-description">Pins show approximate locations only when an address or cross street can be matched.</p></div><span class="map-refresh-label" id="map-refresh-label">MAP REFRESH · 30 MIN</span></div>
+          <div class="map-legend" aria-label="Map marker legend"><span><i class="map-legend-icon medical">✚</i> Medical</span><span><i class="map-legend-icon vehicle">🚗</i> Vehicle</span><span><i class="map-legend-icon fire">♨</i> Fire</span><span><i class="map-legend-icon police">★</i> Police</span><span><i class="map-legend-icon other">•</i> Other</span></div>
+          <div class="incident-map" id="incident-map" role="region" aria-label="Map of recent incidents"></div>
+          <div class="map-empty-note" id="map-empty-note" hidden>No recent incidents could be placed on the map. Incident list and search are unchanged.</div>
+        </section>
+        </div>
+
+        <section class="dashboard-right" aria-label="Borough incidents and radio calls">
+        <div class="incidents-header">
+          <div class="view-tabs" role="tablist" aria-label="NYC Alert views"><button class="view-tab active" id="incidents-tab" role="tab" aria-selected="true">Latest Incidents</button><button class="view-tab" id="live-calls-tab" role="tab" aria-selected="false">Live Radio Calls</button></div>
+          <label class="search-box"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="search" type="search" placeholder="Search alerts…" autocomplete="off"><kbd>/</kbd></label>
+        </div>
+        <div class="filter-row" id="incident-filters"><span>FILTER</span><button class="filter-chip active" data-filter="all">All alerts</button><button class="filter-chip" data-filter="FDNY">FDNY</button><button class="filter-chip" data-filter="NYPD">NYPD</button><label class="sort-control">SORT <select id="incident-sort" aria-label="Sort incidents"><option value="smart">Smart</option><option value="newest">Newest</option><option value="priority">Priority</option></select></label><span class="filter-spacer"></span><span class="refresh-label"><i></i> AUTO-REFRESH · 15 SEC</span></div>
+        <div class="incident-scroll" id="incident-list" aria-live="polite"><div class="empty-state"><span class="empty-symbol">⌁</span><strong>All quiet on the board</strong><p>Qualified incidents will appear here when reviewed and published.</p><span class="empty-foot">NO ROUTINE CALLS SHOWN</span></div></div>
+        <div class="live-calls-scroll" id="live-calls-list" aria-live="polite" hidden></div>
+        <details class="diagnostics-drawer"><summary>Pipeline diagnostics <span id="diagnostics-summary">Waiting for monitor data</span></summary><div id="diagnostics-content" class="diagnostics-content"><div class="loading-line">Loading diagnostics…</div></div></details>
+        <footer class="main-footer"><span>AI-assisted summaries may be inaccurate. Verify independently.</span><span>NOT AN EMERGENCY DISPATCH SERVICE</span></footer>
+        </section>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <section class="analytics-consent" id="analytics-consent" aria-label="Optional analytics consent" hidden><div><strong>Help improve NYC Alert</strong><p>Optional Google or Meta analytics are off unless you choose to allow them.</p></div><div><button id="analytics-decline" type="button">Decline</button><button id="analytics-accept" type="button">Allow analytics</button></div></section>
+  <div class="auth-modal" id="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" hidden>
+    <section class="auth-dialog">
+      <header class="auth-dialog-header"><div><span class="eyebrow">NYC ALERT ACCOUNT</span><h2 id="auth-title">Log in</h2></div><button class="auth-close" id="auth-close" type="button" aria-label="Close">×</button></header>
+      <p class="auth-message" id="auth-message" role="status" aria-live="polite"></p>
+      <form id="auth-form" class="auth-form"></form>
+    </section>
+  </div>
+  <div class="adblock-modal" id="adblock-modal" role="alertdialog" aria-modal="true" aria-labelledby="adblock-title" aria-describedby="adblock-message" hidden>
+    <div class="adblock-dialog" role="document">
+      <h2 id="adblock-title">Ad Blocker Detected</h2>
+      <p id="adblock-message">To get full access and features of this website, you must disable the ad blocker</p>
+      <button class="adblock-dismiss" id="adblock-dismiss" type="button">I understand</button>
+    </div>
+  </div>
+</body>
+</html>

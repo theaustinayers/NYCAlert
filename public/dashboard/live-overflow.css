@@ -1,0 +1,10 @@
+/* Keep variable-length radio identifiers and transcripts inside their card columns. */
+.live-call-card,.live-call-card>*{box-sizing:border-box;min-width:0;max-width:100%}
+.live-call-title,.live-call-ref,.live-transcript-location,.live-call-summary,.transcript-unavailable,.live-call-foot{display:block;min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word}
+.live-call-ref{line-height:1.5}
+.live-transcript{display:block;width:100%;max-width:100%;box-sizing:border-box;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;line-height:1.65}
+.live-transcript-location{line-height:1.55}
+.live-call-summary{line-height:1.6}
+.live-call-foot{display:flex;align-items:flex-start;justify-content:space-between;gap:9px;flex-wrap:wrap;line-height:1.5}
+.live-call-foot>span{min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word}
+.live-call-audio{display:block;width:100%;max-width:100%;box-sizing:border-box}
