@@ -90,6 +90,9 @@ Point the `nycalert.ai` DNS A record to this server first. If an AAAA record exi
 sudo bash deploy/setup-letsencrypt.sh your-operations-email@example.com
 ```
 
+### One-click GitHub updates
+
+The Ubuntu installer provisions a root-owned updater service and systemd path trigger; the bot account can only create a request marker and cannot invoke arbitrary root commands. For an existing server, run `sudo bash deploy/install-github-updater.sh` from the updated repository root; a fresh install configures the same updater with `sudo bash deploy/install-ubuntu.sh`. Copy the printed public key and add it in the private repository's **Settings → Deploy keys** with **Allow write access disabled**. Keep `/etc/nyc-alert-updater/deploy_key` private, then restart `nyc-alert-bot`. An authorized Admin can use **Settings → Website updates → Update to new version**. The updater fetches `main`, stages and builds, snapshots app files, swaps only after the build succeeds, health-checks, and restores the app snapshot if a deploy or health check fails. It never replaces the protected environment file or `DATA_DIR`; database/data migrations themselves are not reversed by app-file rollback. Back up `DATA_DIR` separately.
 The setup installs Nginx and Certbot, moves the app listener to `127.0.0.1:8080`, proxies public traffic through Nginx, requests a certificate for `nycalert.ai`, and enables HTTP-to-HTTPS redirection. The existing `/etc/nyc-alert-bot.env` remains untouched; a systemd drop-in overrides only dashboard host and port. Certbot's systemd timer handles renewals. Check with `sudo certbot renew --dry-run` and `curl -I https://nycalert.ai`.
 
 ## Completing the Broadcastify/AI integration

@@ -40,6 +40,8 @@ async function init() {
   $('#download-learning').addEventListener('click', exportLearningLog);
   $('#clear-learning').addEventListener('click', clearLearningLog);
   $('#learning-search').addEventListener('input', renderLearningEvents);
+  $('#update-website').addEventListener('click', triggerWebsiteUpdate);
+  $('#refresh-update-status').addEventListener('click', loadDeploymentUpdateStatus);
   $('#create-incident').addEventListener('click', () => openIncidentEditor());
   $('#incident-form').addEventListener('submit', saveIncident);
   $('#incident-form').addEventListener('click', (event) => { if (event.target.value === 'cancel') $('#incident-editor').close(); });
@@ -51,7 +53,10 @@ async function init() {
   }
   $('#admin-session-label').textContent = state.session.account?.email || 'Administrator session';
   activateSection('users');
-  await Promise.all([loadUsers(), loadAdministrators(), loadIncidents(), loadWebhooks(), loadAnalytics(), loadLearningLog()]);
+  await Promise.all([loadUsers(), loadAdministrators(), loadIncidents(), loadWebhooks(), loadAnalytics(), loadLearningLog(), loadDeploymentUpdateStatus()]);
+  window.setInterval(() => {
+    if (state.section === 'settings') void loadDeploymentUpdateStatus();
+  }, 5000);
 }
 
 function wireNavigation() {
@@ -72,7 +77,7 @@ function activateSection(name) {
     incidents: ['EDITORIAL CONTROL', 'Incidents', 'Manage current incident cards and privately held location-correction reports.'],
     webhooks: ['INTEGRATIONS', 'Webhooks', 'Review assigned destinations. Stored webhook targets are not dispatched yet.'],
     analytics: ['SITE CONFIGURATION', 'Analytics', 'Configure consent-gated analytics IDs and search-engine verification tags.'],
-    settings: ['SYSTEM SETTINGS', 'Settings', 'Manage staff roles and inspect transcript-only learning workflow data.']
+    settings: ['SYSTEM SETTINGS', 'Settings', 'Manage staff roles, transcript learning data, and protected website updates.']
   };
   const [eyebrow, title, description] = labels[name] || labels.users;
   $('#section-eyebrow').textContent = eyebrow;
@@ -86,7 +91,49 @@ async function refreshCurrent() {
   if (state.section === 'incidents') return loadIncidents();
   if (state.section === 'webhooks') return loadWebhooks();
   if (state.section === 'analytics') return loadAnalytics();
-  return Promise.all([loadAdministrators(), loadLearningLog()]);
+  return Promise.all([loadAdministrators(), loadLearningLog(), loadDeploymentUpdateStatus()]);
+}
+
+async function loadDeploymentUpdateStatus() {
+  try {
+    const data = await api('/api/admin/deployment-update');
+    const status = data.status;
+    const badge = $('#deployment-update-badge');
+    const button = $('#update-website');
+    const message = $('#deployment-update-status');
+    const result = $('#deployment-update-result');
+    badge.textContent = status.state.replaceAll('-', ' ').toUpperCase();
+    badge.classList.toggle('approved', status.state === 'succeeded');
+    badge.classList.toggle('pending-approval', status.state === 'queued' || status.state === 'updating');
+    badge.classList.toggle('suspended', status.state === 'failed' || status.state === 'not-configured');
+    message.textContent = status.message || 'Update service status unavailable.';
+    if (status.commit) message.textContent += ` Current deployed commit: ${status.commit}.`;
+    button.disabled = !['idle', 'succeeded', 'failed'].includes(status.state);
+    button.textContent = status.state === 'queued' || status.state === 'updating' ? 'Update in progress…' : 'Update to new version';
+    result.textContent = status.finishedAt ? `${status.state === 'succeeded' ? 'Last update completed' : 'Last update failed'} ${formatTime(status.finishedAt)}${status.commit ? ` · ${status.commit}` : ''}` : '';
+  } catch (error) {
+    $('#deployment-update-badge').textContent = 'STATUS UNAVAILABLE';
+    $('#deployment-update-status').textContent = error.message;
+    $('#update-website').disabled = true;
+  }
+}
+
+async function triggerWebsiteUpdate() {
+  if (!confirm('Update the website from the private GitHub main branch now? The service may briefly restart. Persistent DATA_DIR and environment settings are preserved; application files are rolled back if the health check fails.')) return;
+  const button = $('#update-website');
+  button.disabled = true;
+  $('#deployment-update-result').textContent = 'Requesting protected GitHub update…';
+  try {
+    const result = await api('/api/admin/deployment-update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    $('#deployment-update-status').textContent = result.status.message;
+    showMessage('GitHub update queued. This page will show its progress.');
+    await loadDeploymentUpdateStatus();
+  } catch (error) {
+    showMessage(error.message, true);
+    await loadDeploymentUpdateStatus();
+  }
 }
 
 async function loadLearningLog() {

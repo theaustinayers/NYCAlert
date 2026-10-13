@@ -27,7 +27,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 printf '%s\n' 'postfix postfix/main_mailer_type select Internet Site' 'postfix postfix/mailname string nycalert.ai' | debconf-set-selections
 apt-get update
-apt-get install -y ca-certificates curl cmake build-essential git gnupg wget rsync pkg-config ffmpeg postfix opendkim opendkim-tools
+apt-get install -y ca-certificates curl cmake build-essential git gnupg wget rsync pkg-config ffmpeg postfix opendkim opendkim-tools openssh-client jq
 if [[ -f /etc/postfix/main.cf ]]; then
   cp -a /etc/postfix/main.cf "/etc/postfix/main.cf.nycalert.bak.$(date +%Y%m%d%H%M%S)"
 fi
@@ -203,7 +203,65 @@ ReadWritePaths=/var/lib/nyc-alert-bot ${APP_DIR}/dist
 WantedBy=multi-user.target
 UNIT
 chmod 0644 "${UNIT_FILE}"
+
+# The admin update action can only start this fixed root-owned service through sudo.
+UPDATER_DIR="/etc/nyc-alert-updater"
+UPDATER_KEY="${UPDATER_DIR}/deploy_key"
+UPDATER_KNOWN_HOSTS="${UPDATER_DIR}/known_hosts"
+UPDATER_HELPER="/usr/local/sbin/nyc-alert-update"
+UPDATER_UNIT="/etc/systemd/system/nyc-alert-updater.service"
+UPDATER_PATH="/etc/systemd/system/nyc-alert-updater.path"
+install -d -o root -g root -m 0700 "${UPDATER_DIR}"
+if [[ ! -s "${UPDATER_KEY}" ]]; then
+  ssh-keygen -q -t ed25519 -N '' -C 'NYC Alert read-only deploy key' -f "${UPDATER_KEY}"
+fi
+chown root:root "${UPDATER_KEY}"
+chmod 0600 "${UPDATER_KEY}"
+# Trust the SSH host key returned by GitHub's HTTPS-verified metadata API.
+curl -fsSL https://api.github.com/meta | jq -r '.ssh_keys[] | select(startswith("ssh-ed25519 ")) | "github.com " + .' > "${UPDATER_KNOWN_HOSTS}"
+if [[ ! -s "${UPDATER_KNOWN_HOSTS}" ]]; then
+  echo 'Could not obtain GitHub SSH host keys from the HTTPS metadata API.' >&2
+  exit 1
+fi
+chown root:root "${UPDATER_KNOWN_HOSTS}"
+chmod 0600 "${UPDATER_KNOWN_HOSTS}"
+install -o root -g root -m 0755 deploy/nyc-alert-update.sh "${UPDATER_HELPER}"
+cat > "${UPDATER_UNIT}" <<UNIT
+[Unit]
+Description=Safely update NYC Alert from private GitHub main
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/nyc-alert-update
+TimeoutStartSec=20min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=${APP_DIR} /var/lib/nyc-alert-bot /var/lib/nyc-alert-updater /var/backups/nyc-alert-bot /var/tmp /run/lock
+UNIT
+chmod 0644 "${UPDATER_UNIT}"
+cat > "${UPDATER_PATH}" <<'PATHUNIT'
+[Unit]
+Description=Watch for authorized NYC Alert GitHub update requests
+
+[Path]
+PathExists=/var/lib/nyc-alert-bot/update-request
+Unit=nyc-alert-updater.service
+
+[Install]
+WantedBy=multi-user.target
+PATHUNIT
+chmod 0644 "${UPDATER_PATH}"
+install -d -o root -g nyc-alert -m 0750 /var/lib/nyc-alert-updater
+
 systemctl daemon-reload
+systemctl enable --now nyc-alert-updater.path
 
 cat <<'DONE'
 
@@ -225,6 +283,13 @@ Next steps:
        sudo systemctl enable --now nyc-alert-bot
      Inspect service logs with:
        sudo journalctl -u nyc-alert-bot -f
+      6. Add this read-only deploy key to the private repository's Settings > Deploy keys
+         (leave "Allow write access" disabled) to enable Admin > Settings > Update website:
+    DONE
+    cat "${UPDATER_KEY}.pub"
+    cat <<'DONE'
+        The private key stays protected at /etc/nyc-alert-updater/deploy_key. Restart the bot
+        after adding the key so the Settings page can detect updater readiness.
 
 Local whisper.cpp transcription runs on this server and does not incur a hosted Whisper
 per-minute fee. CPU speed and model quality depend on the machine. OpenAI triage is still

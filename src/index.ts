@@ -16,11 +16,13 @@ import { BroadcastifyAudioRetriever } from './providers/broadcastify-audio.js';
 import { BroadcastifyStaticStreamMonitor } from './providers/broadcastify-static-stream.js';
 import { NominatimIncidentGeocoder } from './providers/map-geocoder.js';
 import { LearningLog } from './services/learning-log.js';
+import { DeploymentUpdater } from './services/deployment-updater.js';
 
 const store = new SubscriptionStore(config.dataDir);
 const accountStore = new AccountStore(config.dataDir);
 const siteSettingsStore = new SiteSettingsStore(config.dataDir);
 const learningLog = new LearningLog(config.dataDir, config.aiLearningLogEnabled, config.aiLearningLogRetentionDays, config.aiLearningLogMaxEvents);
+const deploymentUpdater = new DeploymentUpdater(config.dataDir);
 const dashboardStore = new DashboardStore(config.dashboardPublicAudio, 300, config.dashboardPublicTranscripts);
 const dashboard = new DashboardServer(dashboardStore, config.dashboardPort, config.dashboardHost, config.applicationId, accountStore, {
   publicUrl: config.dashboardPublicUrl,
@@ -33,7 +35,7 @@ const dashboard = new DashboardServer(dashboardStore, config.dashboardPort, conf
   smtpUsername: config.smtpUsername,
   smtpPassword: config.smtpPassword,
   smtpFrom: config.smtpFrom
-}, siteSettingsStore, learningLog);
+}, siteSettingsStore, learningLog, deploymentUpdater);
 const incidentGeocoder = new NominatimIncidentGeocoder(config.mapGeocoderContact);
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 let feedPoller: CallFeedPoller | undefined;

@@ -11,6 +11,7 @@ import type { DashboardStore } from '../services/dashboard-store.js';
 import type { AccountStore, AccountStatus, AccountWebhook, AudienceAccountType } from '../storage/account-store.js';
 import type { SiteSettings, SiteSettingsStore } from '../storage/site-settings-store.js';
 import type { LearningLog } from '../services/learning-log.js';
+import type { DeploymentUpdater } from '../services/deployment-updater.js';
 import { logger } from '../logger.js';
 
 export interface DashboardAuthConfig {
@@ -95,7 +96,8 @@ export class DashboardServer {
     private readonly accounts?: AccountStore,
     private readonly authConfig?: DashboardAuthConfig,
     private readonly siteSettings?: SiteSettingsStore,
-    private readonly learningLog?: LearningLog
+    private readonly learningLog?: LearningLog,
+    private readonly deploymentUpdater?: DeploymentUpdater
   ) {}
 
   setPendingIncidentAdminHandlers(
@@ -226,7 +228,7 @@ export class DashboardServer {
         const [name, contentType] = file;
         response.writeHead(200, {
           'Content-Type': contentType,
-          'Cache-Control': name.endsWith('.html') || name.endsWith('.css') ? 'no-store' : 'public, max-age=300',
+          'Cache-Control': name.endsWith('.html') || name.endsWith('.css') || name.endsWith('.js') ? 'no-store' : 'public, max-age=300',
           'X-Content-Type-Options': 'nosniff'
         });
         if (request.method === 'HEAD') response.end();
@@ -415,6 +417,10 @@ export class DashboardServer {
         json(response, 403, { error: 'Only administrators can change settings or clear learning data.' });
         return true;
       }
+      if (url.pathname.startsWith('/api/admin/deployment-update') && !isAdmin) {
+        json(response, 403, { error: 'Only administrators can run website updates.' });
+        return true;
+      }
       if (mutating && (url.pathname.startsWith('/api/admin/incidents') || url.pathname.startsWith('/api/admin/accounts')) && !canModerate) {
         json(response, 403, { error: 'Reviewer accounts have read-only access.' });
         return true;
@@ -430,6 +436,24 @@ export class DashboardServer {
           pendingIncidents: pendingIncidents.length,
           dataWindow: 'current process only; resets when service restarts'
         });
+        return true;
+      }
+      if (url.pathname === '/api/admin/deployment-update') {
+        if (!this.deploymentUpdater) {
+          json(response, 503, { error: 'GitHub updater is not configured.' });
+          return true;
+        }
+        if (request.method === 'GET') {
+          json(response, 200, { status: await this.deploymentUpdater.getStatus() });
+          return true;
+        }
+        if (request.method !== 'POST') { json(response, 405, { error: 'Method not allowed.' }); return true; }
+        if (!this.hasSameOrigin(request)) { json(response, 403, { error: 'Request origin was not accepted.' }); return true; }
+        try {
+          const status = await this.deploymentUpdater.trigger();
+          logger.warn({ action: 'github-update-requested', actorId: adminSession.account?.id ?? 'bootstrap-admin' }, 'Admin requested GitHub update');
+          json(response, 202, { status });
+        } catch (error) { json(response, 409, { error: error instanceof Error ? error.message : 'Could not queue update.' }); }
         return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/learning-log') {

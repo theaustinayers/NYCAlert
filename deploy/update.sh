@@ -8,7 +8,7 @@ APP_DIR="${APP_DIR:-/opt/nyc-alert-bot}"
 ENV_FILE="${ENV_FILE:-/etc/nyc-alert-bot.env}"
 SERVICE="nyc-alert-bot.service"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/nyc-alert-bot}"
-SOURCE_DIR="$(pwd -P)"
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 STAGE=""
 ROLLBACK_STAGE=""
@@ -56,7 +56,7 @@ esac
 
 install -d -m 0700 "${BACKUP_ROOT}"
 install -d -m 0755 "$(dirname "${APP_DIR}")"
-STAGE="$(mktemp -d "$(dirname "${APP_DIR}")/.nyc-alert-stage.XXXXXX")"
+STAGE="$(mktemp -d /var/tmp/nyc-alert-stage.XXXXXX)"
 cleanup() {
   if [[ -n "${STAGE}" && -d "${STAGE}" ]]; then rm -rf -- "${STAGE}"; fi
   if [[ -n "${ROLLBACK_STAGE}" && -d "${ROLLBACK_STAGE}" ]]; then rm -rf -- "${ROLLBACK_STAGE}"; fi
@@ -66,7 +66,7 @@ restore_on_failure() {
   if (( status != 0 )) && (( DEPLOY_STARTED == 1 )); then
     echo "Update failed; restoring application files from ${BACKUP}. Persistent DATA_DIR and environment file were not touched." >&2
     systemctl stop "${SERVICE}" || true
-    ROLLBACK_STAGE="$(mktemp -d "$(dirname "${APP_DIR}")/.nyc-alert-rollback.XXXXXX")"
+    ROLLBACK_STAGE="$(mktemp -d /var/tmp/nyc-alert-rollback.XXXXXX)"
     tar -xzf "${BACKUP}" -C "${ROLLBACK_STAGE}" --numeric-owner || true
     if [[ -d "${ROLLBACK_STAGE}/$(basename "${APP_DIR}")" ]]; then
       rsync -a --delete \
@@ -95,6 +95,7 @@ rsync -a --delete \
   "${SOURCE_DIR}/" "${STAGE}/"
 (
   cd "${STAGE}"
+  export npm_config_cache="${STAGE}/npm-cache"
   npm ci
   npm run build
 )

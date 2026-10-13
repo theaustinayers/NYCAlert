@@ -68,6 +68,23 @@ async function availablePort(): Promise<number> {
 }
 
 describe('DashboardServer account routes', () => {
+  it('serves versioned admin scripts without cache so deployed HTML and JavaScript stay in sync', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1');
+    await server.start();
+    try {
+      const page = await fetch(`${origin}/admin`);
+      assert.equal(page.status, 200);
+      const html = await page.text();
+      assert.match(html, /\/admin\.js\?v=admin-20261013-2/);
+      assert.match(html, /id="update-website"/);
+      const script = await fetch(`${origin}/admin.js?v=admin-20261013-2`);
+      assert.equal(script.status, 200);
+      assert.equal(script.headers.get('cache-control'), 'no-store');
+    } finally { await server.stop(); }
+  });
+
   it('requires administrator sign-in to list accounts and sets an HttpOnly session cookie', async () => {
     const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;
@@ -87,6 +104,8 @@ describe('DashboardServer account routes', () => {
       assert.equal(denied.status, 401);
       assert.equal((await fetch(`${origin}/api/admin/overview`)).status, 401);
       assert.equal((await fetch(`${origin}/api/admin/analytics`)).status, 401);
+      assert.equal((await fetch(`${origin}/api/admin/deployment-update`)).status, 401);
+      assert.equal((await fetch(`${origin}/api/admin/deployment-update`)).status, 401);
       const deniedInvite = await fetch(`${origin}/api/admin/administrators/invite`, {
         method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
         body: JSON.stringify({ firstName: 'New', lastName: 'Admin', email: 'new-admin@example.test' })
@@ -124,6 +143,8 @@ describe('DashboardServer account routes', () => {
       const listed = await fetch(`${origin}/api/admin/accounts`, { headers: { Cookie: cookie } });
       assert.equal(listed.status, 200);
       assert.deepEqual((await listed.json() as { accounts: unknown[] }).accounts, []);
+      const updateNotInstalled = await fetch(`${origin}/api/admin/deployment-update`, { headers: { Cookie: cookie } });
+      assert.equal(updateNotInstalled.status, 503);
       const smtpRequired = await fetch(`${origin}/api/admin/administrators/invite`, {
         method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
         body: JSON.stringify({ firstName: 'New', lastName: 'Admin', email: 'new-admin@example.test' })
