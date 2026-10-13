@@ -16,6 +16,22 @@ BACKUP="${BACKUP_ROOT}/app-${STAMP}.tar.gz"
 SERVICE_WAS_ACTIVE=0
 DEPLOY_STARTED=0
 
+report_update_progress() {
+  local message="$1" status_file="${NYC_ALERT_UPDATE_STATUS_FILE:-}"
+  [[ -n "${status_file}" ]] || return 0
+  local now tmp
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  tmp="${status_file}.tmp"
+  jq -n \
+    --arg requestedAt "${NYC_ALERT_UPDATE_REQUESTED_AT:-${now}}" \
+    --arg startedAt "${NYC_ALERT_UPDATE_STARTED_AT:-${now}}" \
+    --arg message "${message}" \
+    '{state:"updating",requestedAt:$requestedAt,startedAt:$startedAt,message:$message}' > "${tmp}"
+  chmod 0640 "${tmp}"
+  chown root:nyc-alert "${tmp}"
+  mv -f -- "${tmp}" "${status_file}"
+}
+
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root, for example: sudo bash deploy/update.sh" >&2
   exit 1
@@ -63,6 +79,13 @@ cleanup() {
 }
 restore_on_failure() {
   status=$?
+  if (( status != 0 )); then
+    if (( DEPLOY_STARTED == 1 )); then
+      report_update_progress 'Update failed during deployment; restoring the previous application files.' || true
+    else
+      report_update_progress 'Update failed before deployment; the existing application remains in place.' || true
+    fi
+  fi
   if (( status != 0 )) && (( DEPLOY_STARTED == 1 )); then
     echo "Update failed; restoring application files from ${BACKUP}. Persistent DATA_DIR and environment file were not touched." >&2
     systemctl stop "${SERVICE}" || true
@@ -77,6 +100,7 @@ restore_on_failure() {
     fi
     if [[ -d "${APP_DIR}/dist" ]]; then chown -R nyc-alert:nyc-alert "${APP_DIR}/dist" || true; fi
     systemctl start "${SERVICE}" || true
+    report_update_progress 'Update failed; the previous application files were restored.' || true
     echo "Inspect the service with: sudo journalctl -u ${SERVICE} -n 100 --no-pager" >&2
   fi
   cleanup
@@ -85,6 +109,7 @@ restore_on_failure() {
 trap restore_on_failure EXIT
 
 # Stage and compile before interrupting the running service.
+report_update_progress 'Preparing a clean staging directory from GitHub main.'
 rsync -a --delete \
   --exclude='.git/' \
   --exclude='node_modules/' \
@@ -96,11 +121,14 @@ rsync -a --delete \
 (
   cd "${STAGE}"
   export npm_config_cache="${STAGE}/npm-cache"
+  report_update_progress 'Installing dependencies in the isolated staging directory (npm ci).'
   npm ci
+  report_update_progress 'Building the staged application.'
   npm run build
 )
 
 # Save installed app code and runtime files, but never archive its data directory or secrets.
+report_update_progress 'Creating a protected backup of the current application files.'
 tar -czf "${BACKUP}" -C "$(dirname "${APP_DIR}")" \
   --exclude="$(basename "${APP_DIR}")/data" \
   --exclude="$(basename "${APP_DIR}")/data/**" \
@@ -111,6 +139,7 @@ chmod 0600 "${BACKUP}"
 
 systemctl is-active --quiet "${SERVICE}" && SERVICE_WAS_ACTIVE=1 || true
 DEPLOY_STARTED=1
+report_update_progress 'Installing the staged application; persistent DATA_DIR and environment are untouched.'
 if (( SERVICE_WAS_ACTIVE == 1 )); then systemctl stop "${SERVICE}"; fi
 
 # Preserve the existing DATA_DIR (including accounts, subscriptions, site settings and webhook assignments).
@@ -127,6 +156,7 @@ chown -R nyc-alert:nyc-alert "${APP_DIR}/dist"
 systemctl start "${SERVICE}"
 PORT="$(sed -n 's/^DASHBOARD_PORT=//p' "${ENV_FILE}" | tail -n 1 | tr -d '\r"' | xargs || true)"
 if [[ -z "${PORT}" ]]; then PORT="${SERVER_PORT:-${PORT:-8080}}"; fi
+report_update_progress "Waiting for the application health check on port ${PORT}."
 if ! curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null; then
   echo "New app did not pass its health check at 127.0.0.1:${PORT}." >&2
   exit 1

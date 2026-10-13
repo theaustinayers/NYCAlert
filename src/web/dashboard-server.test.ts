@@ -82,6 +82,7 @@ describe('DashboardServer account routes', () => {
       const script = await fetch(`${origin}/admin.js?v=admin-20261013-2`);
       assert.equal(script.status, 200);
       assert.equal(script.headers.get('cache-control'), 'no-store');
+      assert.match(await script.text(), /async function loadOverview\(\)/);
     } finally { await server.stop(); }
   });
 
@@ -104,7 +105,6 @@ describe('DashboardServer account routes', () => {
       assert.equal(denied.status, 401);
       assert.equal((await fetch(`${origin}/api/admin/overview`)).status, 401);
       assert.equal((await fetch(`${origin}/api/admin/analytics`)).status, 401);
-      assert.equal((await fetch(`${origin}/api/admin/deployment-update`)).status, 401);
       assert.equal((await fetch(`${origin}/api/admin/deployment-update`)).status, 401);
       const deniedInvite = await fetch(`${origin}/api/admin/administrators/invite`, {
         method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },

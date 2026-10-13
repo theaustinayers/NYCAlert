@@ -41,7 +41,7 @@ async function init() {
   $('#clear-learning').addEventListener('click', clearLearningLog);
   $('#learning-search').addEventListener('input', renderLearningEvents);
   $('#update-website').addEventListener('click', triggerWebsiteUpdate);
-  $('#refresh-update-status').addEventListener('click', loadDeploymentUpdateStatus);
+  $('#refresh-update-status').addEventListener('click', () => loadDeploymentUpdateStatus(true));
   $('#create-incident').addEventListener('click', () => openIncidentEditor());
   $('#incident-form').addEventListener('submit', saveIncident);
   $('#incident-form').addEventListener('click', (event) => { if (event.target.value === 'cancel') $('#incident-editor').close(); });
@@ -53,7 +53,7 @@ async function init() {
   }
   $('#admin-session-label').textContent = state.session.account?.email || 'Administrator session';
   activateSection('users');
-  await Promise.all([loadUsers(), loadAdministrators(), loadIncidents(), loadWebhooks(), loadAnalytics(), loadLearningLog(), loadDeploymentUpdateStatus()]);
+  await Promise.all([loadOverview(), loadUsers(), loadAdministrators(), loadIncidents(), loadWebhooks(), loadAnalytics(), loadLearningLog(), loadDeploymentUpdateStatus()]);
   window.setInterval(() => {
     if (state.section === 'settings') void loadDeploymentUpdateStatus();
   }, 5000);
@@ -87,14 +87,30 @@ function activateSection(name) {
 }
 
 async function refreshCurrent() {
-  if (state.section === 'users') return Promise.all([loadUsers(), loadAdministrators()]);
+  if (state.section === 'users') return Promise.all([loadOverview(), loadUsers(), loadAdministrators()]);
   if (state.section === 'incidents') return loadIncidents();
   if (state.section === 'webhooks') return loadWebhooks();
   if (state.section === 'analytics') return loadAnalytics();
   return Promise.all([loadAdministrators(), loadLearningLog(), loadDeploymentUpdateStatus()]);
 }
 
-async function loadDeploymentUpdateStatus() {
+async function loadOverview() {
+  try {
+    const data = await api('/api/admin/overview');
+    $('#overview-users').textContent = data.users ?? '—';
+    $('#overview-pending-users').textContent = data.pendingUsers ?? '—';
+  } catch (error) {
+    showMessage(error.message, true);
+  }
+}
+
+async function loadDeploymentUpdateStatus(showChecking = false) {
+  const refreshButton = $('#refresh-update-status');
+  if (showChecking) {
+    refreshButton.disabled = true;
+    refreshButton.textContent = 'Checking…';
+    $('#deployment-update-status').textContent = 'Refreshing protected updater status…';
+  }
   try {
     const data = await api('/api/admin/deployment-update');
     const status = data.status;
@@ -115,6 +131,11 @@ async function loadDeploymentUpdateStatus() {
     $('#deployment-update-badge').textContent = 'STATUS UNAVAILABLE';
     $('#deployment-update-status').textContent = error.message;
     $('#update-website').disabled = true;
+  } finally {
+    if (showChecking) {
+      refreshButton.disabled = false;
+      refreshButton.textContent = 'Refresh status';
+    }
   }
 }
 
@@ -306,7 +327,6 @@ async function loadIncidents() {
     state.incidents = incidentData.incidents || [];
     state.pending = pendingData.incidents || [];
     renderIncidents();
-    void loadOverview();
   } catch (error) { showMessage(error.message, true); }
 }
 

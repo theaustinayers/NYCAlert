@@ -68,6 +68,10 @@ if [[ ! "${request_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z?$ ]]; then
   request_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 write_status updating 'Fetching the private GitHub main branch and building staged application.'
+started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+export NYC_ALERT_UPDATE_STATUS_FILE="${STATUS_DIR}/status.json"
+export NYC_ALERT_UPDATE_REQUESTED_AT="${request_at}"
+export NYC_ALERT_UPDATE_STARTED_AT="${started_at}"
 rm -f -- "${DATA_DIR}/update-request"
 WORK_DIR="$(mktemp -d /var/tmp/nyc-alert-update.XXXXXX)"
 chmod 0700 "${WORK_DIR}"
