@@ -13,6 +13,7 @@ BACKUP_ROOT="/var/backups/nyc-alert-bot"
 LOCK_FILE="/run/lock/nyc-alert-updater.lock"
 WORK_DIR=""
 STATUS_TMP=""
+LOCK_ACQUIRED=0
 
 unit_data_dir="$(systemctl show nyc-alert-bot.service --property=Environment --value 2>/dev/null | tr ' ' '\n' | sed -n 's/^DATA_DIR=//p' | tail -n 1)"
 if [[ -n "${unit_data_dir}" ]]; then
@@ -41,8 +42,9 @@ write_status() {
 
 finish() {
   local status=$?
-  if (( status != 0 )); then
+  if (( status != 0 && LOCK_ACQUIRED == 1 )); then
     write_status failed "Update failed; previous application files were restored when deployment had started. Check system journal." || true
+    if [[ -n "${request_at:-}" ]]; then rm -f -- "${DATA_DIR}/update-request"; fi
   fi
   if [[ -n "${WORK_DIR}" && -d "${WORK_DIR}" ]]; then rm -rf -- "${WORK_DIR}"; fi
   exit "${status}"
@@ -58,14 +60,15 @@ if ! flock -n 9; then
   echo 'Another update is already running.' >&2
   exit 1
 fi
-if [[ ! -s "${KEY_FILE}" || ! -s "${KNOWN_HOSTS}" ]]; then
-  echo 'GitHub read-only deploy key or known_hosts is missing.' >&2
-  exit 1
-fi
+LOCK_ACQUIRED=1
 
 request_at="$(cat "${DATA_DIR}/update-request" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
 if [[ ! "${request_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z?$ ]]; then
   request_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
+if [[ ! -s "${KEY_FILE}" || ! -s "${KNOWN_HOSTS}" ]]; then
+  echo 'GitHub read-only deploy key or known_hosts is missing.' >&2
+  exit 1
 fi
 write_status updating 'Fetching the private GitHub main branch and building staged application.'
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
