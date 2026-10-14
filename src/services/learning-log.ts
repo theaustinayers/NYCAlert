@@ -18,6 +18,7 @@ export type LearningWorkflowStage =
   | 'incident-updated'
   | 'incident-suppressed'
   | 'incident-withheld'
+  | 'x-publishing'
   | 'discord-routing'
   | 'pending-expired'
   | 'pending-attached'
@@ -63,6 +64,7 @@ export interface LearningEvent {
     discordMessagesSent: number;
     destinations: Array<{ result: 'sent' | 'channel-fetch-failed' | 'unsupported-channel' | 'send-failed'; errorCategory?: string }>;
   };
+  socialPost?: { provider: 'x'; postId?: string; url?: string };
   location?: string;
   geocode?: { attempted: boolean; borough?: string; matched: boolean; latitude?: number; longitude?: number; error?: string };
   units?: string[];

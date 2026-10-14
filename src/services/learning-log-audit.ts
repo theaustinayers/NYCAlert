@@ -10,7 +10,7 @@ type EventSummary = {
 const knownStages = new Set([
   'received', 'transcription', 'transcription-error', 'transcription-ignored', 'repeat-suppressed',
   'triage', 'triage-error', 'geocoding', 'correlation', 'pending-queue', 'incident-published',
-  'incident-updated', 'incident-suppressed', 'incident-withheld', 'discord-routing', 'pending-expired',
+  'incident-updated', 'incident-suppressed', 'incident-withheld', 'discord-routing', 'x-publishing', 'pending-expired',
   'pending-attached', 'pending-discarded', 'pending-approved', 'retry', 'error'
 ]);
 const knownCategories = new Set(['breaking', 'newsworthy', 'funny', 'weird_unique', 'routine']);

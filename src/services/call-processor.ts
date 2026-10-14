@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { subscriptionAudience, type AlertSubscription } from '../domain/subscriptions.js';
 import { analyzeFdnyTransmission } from '../domain/fdny-radio.js';
 import { curateIncidentHeadline, shouldNotify, type CallTriage, type RadioCall } from '../domain/triage.js';
+import type { IncidentPostPublisher } from '../providers/x-post.js';
 import type { CallAnalysisProvider } from '../providers/ai.js';
 import type { MapCoordinates } from '../providers/map-geocoder.js';
 import { logger } from '../logger.js';
@@ -100,7 +101,9 @@ export class CallProcessor {
     private readonly geocoder?: IncidentGeocoder,
     private readonly minBuffInterest = 4,
     private readonly minNewsMediaDesk = 4,
-    private readonly learningLog = new LearningLog('./data', false)
+    private readonly learningLog = new LearningLog('./data', false),
+    private readonly incidentPublisher?: IncidentPostPublisher,
+    private readonly publicUrl = 'https://nycalert.ai'
   ) {}
 
   listPendingIncidents(): Array<{ id: string; agency: RadioCall['agency']; borough: RadioCall['borough']; eventType?: CallTriage['incidentType']; summary: string; location?: string; createdAt: string; expiresAt: string }> {
@@ -515,6 +518,34 @@ export class CallProcessor {
       correlation: { candidateCount: candidates.length, pendingMatchCount: pendingMatches.length, incidentId: incident.id }
     });
 
+    const xPostTask = this.incidentPublisher && publicQualified
+      ? this.incidentPublisher.publishIncident({
+          id: incident.id,
+          headline: triage.headline ?? incident.title.split(' | ')[0] ?? 'Incident',
+          ...(triage.incidentType ? { incidentType: triage.incidentType } : {}),
+          agency: call.agency,
+          borough: incident.borough,
+          ...(incident.location ? { location: incident.location } : {}),
+          unitIds: incident.unitIds,
+          boxNumbers: incident.boxNumbers,
+          newsworthinessScore: incident.newsworthinessScore,
+          incidentUrl: `${this.publicUrl}/incident/${encodeURIComponent(incident.id)}`
+        }).then((posted) => {
+          this.recordLearning(call, trace, 'x-publishing', {
+            incidentId: incident.id,
+            disposition: 'x-post-created',
+            socialPost: { provider: 'x', postId: posted.postId, url: posted.url }
+          });
+        }).catch((error: unknown) => {
+          logger.error({ error, incidentId: incident.id, callId: call.id }, 'Could not publish incident to X');
+          this.recordLearning(call, trace, 'x-publishing', {
+            incidentId: incident.id,
+            disposition: 'x-post-failed',
+            error: { name: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) }
+          });
+        })
+      : undefined;
+
     const destinations = new Map<string, AlertSubscription[]>();
     for (const subscription of eligibleSubscriptions) {
       const channelSubscriptions = destinations.get(subscription.channelId) ?? [];
@@ -583,6 +614,7 @@ export class CallProcessor {
         destinations: destinationResults
       }
     });
+    await xPostTask;
     return 'alert';
   }
 

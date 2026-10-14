@@ -9,6 +9,7 @@ import type { SubscriptionStore } from '../storage/subscription-store.js';
 import { DashboardStore } from './dashboard-store.js';
 import { CallProcessor, roleMentionOptions } from './call-processor.js';
 import { LearningLog } from './learning-log.js';
+import type { IncidentPostPublisher, XIncidentPost } from '../providers/x-post.js';
 
 const testDirectory = await mkdtemp(join(tmpdir(), 'nyc-call-processor-'));
 after(async () => rm(testDirectory, { recursive: true, force: true }));
@@ -461,6 +462,7 @@ describe('CallProcessor', () => {
 
   it('routes Discord notifications independently to Public, Buff, and News Media scores', async () => {
     const sentMentions: string[] = [];
+    let xPosts = 0;
     const channel = {
       isTextBased: () => true,
       async send(options: { content?: string }) {
@@ -486,7 +488,9 @@ describe('CallProcessor', () => {
       }
     };
     const dashboard = new DashboardStore(false);
-    const processor = new CallProcessor(client, { listForCall: () => subscriptions } as unknown as SubscriptionStore, analysis, dashboard, false, 0.78, 4, undefined, 4);
+    const processor = new CallProcessor(client, { listForCall: () => subscriptions } as unknown as SubscriptionStore, analysis, dashboard, false, 0.78, 4, undefined, 4, 4, undefined, {
+      async publishIncident() { xPosts += 1; return { postId: 'unused', text: '', url: '' }; }
+    });
 
     const result = await processor.process({
       id: 'buff-only-incident', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(),
@@ -496,6 +500,42 @@ describe('CallProcessor', () => {
     assert.equal(result, 'alert');
     assert.equal(dashboard.search().length, 1);
     assert.deepEqual(sentMentions, ['<@&news-role>', '<@&buff-role>']);
+    assert.equal(xPosts, 0, 'a high Buff score without Public qualification must not be posted to X');
+  });
+
+  it('posts one Public-qualified new incident to X and does not repost its follow-up update', async () => {
+    const posts: XIncidentPost[] = [];
+    const publisher: IncidentPostPublisher = {
+      async publishIncident(incident) {
+        posts.push(incident);
+        return { postId: '123456789', text: 'created', url: 'https://x.com/i/web/status/123456789' };
+      }
+    };
+    let triageCount = 0;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript is supplied'); },
+      async triage() {
+        triageCount += 1;
+        return triageCount === 1
+          ? { shouldAlert: true, category: 'newsworthy', headline: 'Reported Building Fire', summary: 'Fire reported.', location: '123 Main Street', incidentType: 'fire', confidence: 0.95, newsworthinessScore: 4 }
+          : { shouldAlert: false, category: 'routine', summary: 'Engine 12 is on scene.', location: '123 Main Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 1 };
+      }
+    };
+    const dashboard = new DashboardStore(false);
+    const processor = new CallProcessor(
+      {} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard,
+      false, 0.78, 4, undefined, 4, 4, new LearningLog(join(testDirectory, 'x-publish-test'), false), publisher, 'https://nycalert.ai'
+    );
+    const occurredAt = new Date();
+
+    await processor.process({ id: 'x-new-incident', agency: 'FDNY', borough: 'Manhattan', occurredAt, transcript: 'Fire at 123 Main Street.' });
+    await processor.process({ id: 'x-incident-follow-up', agency: 'FDNY', borough: 'Manhattan', occurredAt: new Date(occurredAt.getTime() + 60_000), transcript: 'Engine 12 is on scene at 123 Main Street.' });
+
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0]?.headline, 'Reported Building Fire');
+    assert.equal(posts[0]?.location, '123 Main Street');
+    assert.equal(posts[0]?.incidentUrl, `https://nycalert.ai/incident/${dashboard.search()[0]?.id}`);
+    assert.equal(dashboard.search()[0]?.updateCount, 1);
   });
 
   it('records Discord send failures separately from empty subscription matches', async () => {

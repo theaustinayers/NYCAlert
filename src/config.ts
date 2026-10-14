@@ -40,6 +40,12 @@ const schema = z.object({
   BUFF_INTEREST_THRESHOLD: z.coerce.number().int().min(1).max(5).default(4),
   NEWS_MEDIA_DESK_THRESHOLD: z.coerce.number().int().min(1).max(5).default(4),
   BROADCASTIFY_AUDIO_REDISTRIBUTION_ALLOWED: z.string().default('false'),
+  X_AUTO_POST_ENABLED: z.string().default('false'),
+  X_USER_ACCESS_TOKEN: optionalText(z.string().min(1)),
+  X_OAUTH_CONSUMER_KEY: optionalText(z.string().min(1)),
+  X_OAUTH_CONSUMER_SECRET: optionalText(z.string().min(1)),
+  X_OAUTH_ACCESS_TOKEN: optionalText(z.string().min(1)),
+  X_OAUTH_ACCESS_TOKEN_SECRET: optionalText(z.string().min(1)),
   TRIAGE_MODEL: z.string().default('gpt-4o-mini'),
   DASHBOARD_HOST: z.string().default('0.0.0.0'),
   DASHBOARD_PUBLIC_URL: z.string().url().default('https://nycalert.ai'),
@@ -68,6 +74,17 @@ if (Boolean(parsed.data.ADMIN_EMAIL) !== Boolean(parsed.data.ADMIN_PASSWORD)) {
 }
 if (Boolean(parsed.data.SMTP_USERNAME) !== Boolean(parsed.data.SMTP_PASSWORD)) {
   throw new Error('Configure both SMTP_USERNAME and SMTP_PASSWORD, or leave both empty.');
+}
+if (parsed.data.X_AUTO_POST_ENABLED === 'true' && !parsed.data.X_USER_ACCESS_TOKEN) {
+  const oauth1 = [parsed.data.X_OAUTH_CONSUMER_KEY, parsed.data.X_OAUTH_CONSUMER_SECRET, parsed.data.X_OAUTH_ACCESS_TOKEN, parsed.data.X_OAUTH_ACCESS_TOKEN_SECRET];
+  if (!oauth1.every(Boolean)) throw new Error('X_AUTO_POST_ENABLED requires either an OAuth2 user token or all four X OAuth 1.0a user credentials.');
+}
+const configuredOAuth1Values = [parsed.data.X_OAUTH_CONSUMER_KEY, parsed.data.X_OAUTH_CONSUMER_SECRET, parsed.data.X_OAUTH_ACCESS_TOKEN, parsed.data.X_OAUTH_ACCESS_TOKEN_SECRET];
+if (configuredOAuth1Values.some(Boolean) && !configuredOAuth1Values.every(Boolean)) {
+  throw new Error('Configure all four X OAuth 1.0a user credentials, or leave all four empty.');
+}
+if (parsed.data.X_AUTO_POST_ENABLED === 'true' && parsed.data.X_USER_ACCESS_TOKEN && configuredOAuth1Values.some(Boolean)) {
+  throw new Error('Configure either X_USER_ACCESS_TOKEN or OAuth 1.0a user credentials, not both.');
 }
 
 export const config = {
@@ -106,6 +123,12 @@ export const config = {
   buffInterestThreshold: parsed.data.BUFF_INTEREST_THRESHOLD,
   newsMediaDeskThreshold: parsed.data.NEWS_MEDIA_DESK_THRESHOLD,
   broadcastifyAudioRedistributionAllowed: parsed.data.BROADCASTIFY_AUDIO_REDISTRIBUTION_ALLOWED === 'true',
+  xAutoPostEnabled: parsed.data.X_AUTO_POST_ENABLED === 'true',
+  xUserAccessToken: parsed.data.X_USER_ACCESS_TOKEN,
+  xOAuthConsumerKey: parsed.data.X_OAUTH_CONSUMER_KEY,
+  xOAuthConsumerSecret: parsed.data.X_OAUTH_CONSUMER_SECRET,
+  xOAuthAccessToken: parsed.data.X_OAUTH_ACCESS_TOKEN,
+  xOAuthAccessTokenSecret: parsed.data.X_OAUTH_ACCESS_TOKEN_SECRET,
   triageModel: parsed.data.TRIAGE_MODEL,
   dashboardHost: parsed.data.DASHBOARD_HOST,
   dashboardPublicUrl: parsed.data.DASHBOARD_PUBLIC_URL.replace(/\/$/, ''),

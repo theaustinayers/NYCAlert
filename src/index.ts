@@ -17,6 +17,7 @@ import { BroadcastifyStaticStreamMonitor } from './providers/broadcastify-static
 import { NominatimIncidentGeocoder } from './providers/map-geocoder.js';
 import { LearningLog } from './services/learning-log.js';
 import { DeploymentUpdater } from './services/deployment-updater.js';
+import { XApiIncidentPublisher } from './providers/x-post.js';
 
 const store = new SubscriptionStore(config.dataDir);
 const accountStore = new AccountStore(config.dataDir);
@@ -84,7 +85,18 @@ client.once(Events.ClientReady, async (readyClient) => {
       new WhisperCppTranscriber(config.whisperModelPath, config.whisperExecutablePath, config.whisperThreads, undefined, config.ffmpegPath),
       new OpenAiTriageProvider(config.openAiApiKey, config.triageModel)
     );
-    const processor = new CallProcessor(client, store, analysis, dashboardStore, config.broadcastifyAudioRedistributionAllowed, 0.78, config.newsworthinessThreshold, incidentGeocoder, config.buffInterestThreshold, config.newsMediaDeskThreshold, learningLog);
+    const xPublisher = config.xAutoPostEnabled && config.xUserAccessToken
+      ? new XApiIncidentPublisher({ kind: 'oauth2-user', userAccessToken: config.xUserAccessToken })
+      : config.xAutoPostEnabled && config.xOAuthConsumerKey && config.xOAuthConsumerSecret && config.xOAuthAccessToken && config.xOAuthAccessTokenSecret
+        ? new XApiIncidentPublisher({
+          kind: 'oauth1-user',
+          consumerKey: config.xOAuthConsumerKey,
+          consumerSecret: config.xOAuthConsumerSecret,
+          accessToken: config.xOAuthAccessToken,
+          accessTokenSecret: config.xOAuthAccessTokenSecret
+        })
+        : undefined;
+    const processor = new CallProcessor(client, store, analysis, dashboardStore, config.broadcastifyAudioRedistributionAllowed, 0.78, config.newsworthinessThreshold, incidentGeocoder, config.buffInterestThreshold, config.newsMediaDeskThreshold, learningLog, xPublisher, config.dashboardPublicUrl);
     dashboard.setPendingIncidentAdminHandlers(
       () => processor.listPendingIncidents(),
       (pendingId) => processor.discardPendingIncident(pendingId),

@@ -461,7 +461,7 @@ export class DashboardServer {
         const status = this.learningLog?.getStatus() ?? { enabled: false, fileName: 'learning-debug.jsonl', retentionDays: 0, maxEvents: 0, currentEvents: 0 };
         const limit = Number(url.searchParams.get('limit'));
         const events = this.learningLog?.isEnabled ? await this.learningLog.readRecent(Number.isInteger(limit) && limit > 0 ? limit : 100) : [];
-        json(response, 200, { status, events, workflowStages: ['received', 'transcription', 'triage', 'geocoding', 'correlation', 'pending-queue', 'incident-published/updated/suppressed', 'discord-routing'] });
+        json(response, 200, { status, events, workflowStages: ['received', 'transcription', 'triage', 'geocoding', 'correlation', 'pending-queue', 'incident-published/updated/suppressed', 'discord-routing', 'x-publishing (optional)'] });
         return true;
       }
       if (url.pathname === '/api/admin/learning-log/export') {
