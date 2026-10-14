@@ -1,4 +1,7 @@
 /* Responsive layout: breakpoint follows viewport width so phones/tablets work without UA sniffing. */
+.page-intro-brand { min-width: 0; }
+.homepage-wordmark { display: block; width: min(100%, 680px); height: auto; margin: 8px 0 9px; }
+
 @media (max-width: 900px) {
   .layout { grid-template-columns: minmax(0, 1fr); min-height: calc(100vh - 64px); }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--line); padding: 18px 18px 12px; }
@@ -137,4 +140,6 @@
   .feed-list::-webkit-scrollbar-track { background: #252c34; border-radius: 5px; }
   .feed-list::-webkit-scrollbar-thumb { background: #596675; border-radius: 5px; }
   .feed-card { flex-basis: min(100%, 360px); }
+  .page-intro-brand { min-width: 0; width: 100%; }
+  .homepage-wordmark { display: block; width: min(100%, 620px); height: auto; margin: 5px 0 8px; }
 }

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 270" role="img" aria-labelledby="title desc">
+  <title id="title">NYC Alert</title>
+  <desc id="desc">NYC in white and Alert in red, with a red heartbeat line beneath.</desc>
+  <g font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="178" font-weight="900" letter-spacing="-9">
+    <text x="18" y="158" fill="#f7f7f7">NYC</text>
+    <text x="500" y="158" fill="#ed111f">ALERT</text>
+  </g>
+  <path d="M78 205H553L578 205L600 166L625 244L650 205H1122" fill="none" stroke="#ed111f" stroke-width="10" stroke-linecap="square" stroke-linejoin="miter"/>
+</svg>
