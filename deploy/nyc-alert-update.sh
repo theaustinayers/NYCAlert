@@ -43,7 +43,7 @@ write_status() {
 finish() {
   local status=$?
   if (( status != 0 && LOCK_ACQUIRED == 1 )); then
-    write_status failed "Update failed; previous application files were restored when deployment had started. Check system journal." || true
+    write_status failed "Update failed. Check the updater journal to determine whether staging or deployment failed; if deployment started, rollback was attempted." || true
     if [[ -n "${request_at:-}" ]]; then rm -f -- "${DATA_DIR}/update-request"; fi
   fi
   if [[ -n "${WORK_DIR}" && -d "${WORK_DIR}" ]]; then rm -rf -- "${WORK_DIR}"; fi

@@ -73,6 +73,7 @@ esac
 install -d -m 0700 "${BACKUP_ROOT}"
 install -d -m 0755 "$(dirname "${APP_DIR}")"
 STAGE="$(mktemp -d /var/tmp/nyc-alert-stage.XXXXXX)"
+install -d -m 0700 "${STAGE}/home" "${STAGE}/npm-cache" "${STAGE}/node-gyp" "${STAGE}/xdg-cache"
 cleanup() {
   if [[ -n "${STAGE}" && -d "${STAGE}" ]]; then rm -rf -- "${STAGE}"; fi
   if [[ -n "${ROLLBACK_STAGE}" && -d "${ROLLBACK_STAGE}" ]]; then rm -rf -- "${ROLLBACK_STAGE}"; fi
@@ -120,7 +121,10 @@ rsync -a --delete \
   "${SOURCE_DIR}/" "${STAGE}/"
 (
   cd "${STAGE}"
+  export HOME="${STAGE}/home"
+  export XDG_CACHE_HOME="${STAGE}/xdg-cache"
   export npm_config_cache="${STAGE}/npm-cache"
+  export npm_config_devdir="${STAGE}/node-gyp"
   report_update_progress 'Installing dependencies in the isolated staging directory (npm ci).'
   npm ci
   report_update_progress 'Building the staged application.'
