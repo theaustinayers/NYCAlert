@@ -57,3 +57,84 @@
   .page-intro { flex-direction: column; }
   .intro-badge { align-self: flex-start; }
 }
+
+/* Keep the multi-action desktop header from wrapping underneath its fixed ticker on phones. */
+@media (max-width: 560px) {
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand account"
+      "status status"
+      "ticker ticker";
+    align-items: center;
+    gap: 7px 10px;
+    height: auto;
+    min-height: 0;
+    padding: 8px 12px;
+  }
+  .topbar > .brand { grid-area: brand; min-width: 0; }
+  .topbar > .brand .brand-logo { width: 42px; height: 42px; flex-basis: 42px; }
+  .topbar > .account-actions { grid-area: account; min-width: 0; }
+  .topbar > .donate-button,
+  .topbar > .invite-button { display: none; }
+  .topbar > .topbar-right {
+    grid-area: status;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0;
+    font-size: 9px;
+    min-width: 0;
+  }
+  .topbar > .incident-ticker:not([hidden]) {
+    position: static;
+    inset: auto;
+    grid-area: ticker;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    order: initial;
+    margin: 0;
+  }
+  .incident-ticker > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .layout {
+    padding-top: 0;
+    min-height: auto;
+  }
+  .borough-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 7px;
+  }
+  .borough-filter-label { grid-column: 1 / -1; padding: 0 2px 2px; }
+  .borough-tab,
+  .borough-reset {
+    width: 100%;
+    min-width: 0;
+    min-height: 38px;
+    padding-inline: 4px;
+    font-size: 10px;
+  }
+  .audience-toggle {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+  }
+  .audience-toggle-label { grid-column: 1 / -1; margin: 0; }
+  .audience-tab { min-width: 0; padding-inline: 5px; font-size: 10px; }
+  .feed-list {
+    scrollbar-width: thin;
+    scrollbar-color: #596675 #252c34;
+  }
+  .feed-list::-webkit-scrollbar { height: 5px; }
+  .feed-list::-webkit-scrollbar-track { background: #252c34; border-radius: 5px; }
+  .feed-list::-webkit-scrollbar-thumb { background: #596675; border-radius: 5px; }
+  .feed-card { flex-basis: min(100%, 360px); }
+}
