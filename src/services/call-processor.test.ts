@@ -141,6 +141,38 @@ describe('CallProcessor', () => {
     assert.equal(related.some((event) => 'audioPath' in event || 'audioBytes' in event), false);
   });
 
+  it('logs FDNY radio cues and Queens address candidates without changing the selected location', async () => {
+    const log = new LearningLog(join(testDirectory, 'learning-fdny-grammar'), true, 30, 100);
+    await log.init();
+    const location = '158 24 81st Street';
+    const transcript = `Queens Box 981, ${location}. Transmitting 10-75.`;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript is supplied'); },
+      async triage() {
+        return {
+          shouldAlert: true, category: 'newsworthy', headline: 'Reported Fire', summary: 'Fire reported.',
+          location, incidentType: 'fire', confidence: 0.9, newsworthinessScore: 4
+        };
+      }
+    };
+    const dashboard = new DashboardStore(false);
+    const processor = new CallProcessor(
+      {} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard,
+      false, 0.78, 4, undefined, 4, 4, log
+    );
+
+    await processor.process({ id: 'fdny-queens-grammar', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(), transcript });
+    await log.flush();
+
+    const triage = (await log.readRecent(100)).find((event) => event.stage === 'triage');
+    assert.equal(triage?.fdnyRadioAnalysis?.grammarVersion, 'fdny-literal-signals-v1');
+    assert.deepEqual(triage?.fdnyRadioAnalysis?.signals.map((signal) => transcript.slice(signal.evidence.start, signal.evidence.end)), ['Box 981', '10-75']);
+    assert.equal(triage?.fdnyRadioAnalysis?.queensAddressCandidates[0]?.normalized, '158-24 81st Street');
+    assert.equal(triage?.fdnyRadioAnalysis?.queensAddressCandidates[0]?.verification, 'candidate-only');
+    assert.equal(dashboard.search()[0]?.location, location);
+    assert.equal(dashboard.search()[0]?.latitude, undefined);
+  });
+
   it('marks routine radio traffic as non-incident in the learning log', async () => {
     const log = new LearningLog(join(testDirectory, 'learning-routine'), true, 30, 100);
     await log.init();

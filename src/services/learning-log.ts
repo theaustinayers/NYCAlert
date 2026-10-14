@@ -1,6 +1,7 @@
 import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Agency, Borough } from '../domain/subscriptions.js';
+import type { FdnyTransmissionAnalysis } from '../domain/fdny-radio.js';
 
 export type LearningWorkflowStage =
   | 'received'
@@ -45,6 +46,7 @@ export interface LearningEvent {
   incidentType?: string;
   confidence?: number;
   confidenceKind?: 'triage-evidence-fit';
+  fdnyRadioAnalysis?: FdnyTransmissionAnalysis;
   scores?: { public: number; buff: number; newsMedia: number };
   thresholds?: { triageConfidence?: number; confidence?: number; public: number; buff: number; newsMedia: number };
   qualifications?: { public: boolean; buff: boolean; newsMedia: boolean };

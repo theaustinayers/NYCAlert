@@ -2,6 +2,7 @@ import type { Client } from 'discord.js';
 import { AttachmentBuilder, EmbedBuilder } from 'discord.js';
 import { randomUUID } from 'node:crypto';
 import { subscriptionAudience, type AlertSubscription } from '../domain/subscriptions.js';
+import { analyzeFdnyTransmission } from '../domain/fdny-radio.js';
 import { curateIncidentHeadline, shouldNotify, type CallTriage, type RadioCall } from '../domain/triage.js';
 import type { CallAnalysisProvider } from '../providers/ai.js';
 import type { MapCoordinates } from '../providers/map-geocoder.js';
@@ -257,6 +258,9 @@ export class CallProcessor {
     const unitAssignments = extractActingAsAssignments(transcript);
     const unitIds = extractUnitIds(transcript);
     const boxNumbers = call.agency === 'FDNY' ? extractBoxNumbers(transcript) : [];
+    const fdnyRadioAnalysis = this.learningLog.isEnabled && call.agency === 'FDNY'
+      ? analyzeFdnyTransmission(transcript, call.agency, call.borough, triage.location)
+      : undefined;
     const publicQualified = shouldNotify(triage, this.minTriageConfidence, this.minNewsworthiness);
     const buffQualified = triage.category !== 'routine'
       && triage.confidence >= this.minTriageConfidence
@@ -275,6 +279,7 @@ export class CallProcessor {
       incidentType: triage.incidentType,
       confidence: triage.confidence,
       confidenceKind: trace.confidenceKind,
+      ...(fdnyRadioAnalysis ? { fdnyRadioAnalysis } : {}),
       scores: trace.scores,
       thresholds: { triageConfidence: this.minTriageConfidence, public: this.minNewsworthiness, buff: this.minBuffInterest, newsMedia: this.minNewsMediaDesk },
       qualifications: trace.qualifications,

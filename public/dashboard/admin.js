@@ -199,6 +199,7 @@ function renderLearningEvents() {
       ['Source', `${event.agency || '—'} · ${event.sourceGroup || 'Radio'} · ${event.feedBorough || '—'}`],
       ['Triage', `${latest.headline || event.headline || '—'} · ${latest.category || event.category || '—'}`],
       ['Triage confidence', typeof triage.confidence === 'number' ? `${Math.round(triage.confidence * 100)}% · ${triage.confidenceKind === 'triage-evidence-fit' ? 'transcript evidence fit, not transcription quality or incident verification' : 'legacy value; meaning was not explicitly labeled'}` : '—'],
+      ['FDNY radio parser', triage.fdnyRadioAnalysis ? `${triage.fdnyRadioAnalysis.grammarVersion} · Signals: ${triage.fdnyRadioAnalysis.signals.map((signal) => signal.name).join(', ') || 'none'} · Building mentions: ${triage.fdnyRadioAnalysis.buildingMentions.map((mention) => `${mention.kind}: ${mention.value}`).join('; ') || 'none'} · Queens candidates: ${triage.fdnyRadioAnalysis.queensAddressCandidates.map((candidate) => candidate.normalized).join(', ') || 'none'} (unverified)` : 'Not recorded'],
       ['Scores', triage.scores ? `Public ${triage.scores.public}/5 · Buff ${triage.scores.buff}/5 · News ${triage.scores.newsMedia}/5` : '—'],
       ['Thresholds', triage.thresholds ? `Triage fit ${triage.thresholds.triageConfidence ?? triage.thresholds.confidence ?? '—'} · Public ${triage.thresholds.public} · Buff ${triage.thresholds.buff} · News ${triage.thresholds.newsMedia}` : '—'],
       ['Location', latest.location || event.location || 'Not stated'],
