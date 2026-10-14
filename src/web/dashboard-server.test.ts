@@ -82,7 +82,9 @@ describe('DashboardServer account routes', () => {
       const script = await fetch(`${origin}/admin.js?v=admin-20261013-2`);
       assert.equal(script.status, 200);
       assert.equal(script.headers.get('cache-control'), 'no-store');
-      assert.match(await script.text(), /async function loadOverview\(\)/);
+      const adminScript = await script.text();
+      assert.match(adminScript, /async function loadOverview\(\)/);
+      assert.match(adminScript, /Dashboard reconnecting during update/);
     } finally { await server.stop(); }
   });
 

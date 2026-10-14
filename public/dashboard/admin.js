@@ -1,6 +1,6 @@
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
-const state = { section: 'users', session: null, users: [], incidents: [], pending: [], webhooks: [], learningEvents: [], learningStatus: null };
+const state = { section: 'users', session: null, users: [], incidents: [], pending: [], webhooks: [], learningEvents: [], learningStatus: null, deploymentUpdateStatus: null };
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const formatTime = (value) => {
   const date = new Date(value);
@@ -114,6 +114,7 @@ async function loadDeploymentUpdateStatus(showChecking = false) {
   try {
     const data = await api('/api/admin/deployment-update');
     const status = data.status;
+    state.deploymentUpdateStatus = status;
     const badge = $('#deployment-update-badge');
     const button = $('#update-website');
     const message = $('#deployment-update-status');
@@ -128,6 +129,14 @@ async function loadDeploymentUpdateStatus(showChecking = false) {
     button.textContent = status.state === 'queued' || status.state === 'updating' ? 'Update in progress…' : 'Update to new version';
     result.textContent = status.finishedAt ? `${status.state === 'succeeded' ? 'Last update completed' : 'Last update failed'} ${formatTime(status.finishedAt)}${status.commit ? ` · ${status.commit}` : ''}` : '';
   } catch (error) {
+    const lastStatus = state.deploymentUpdateStatus;
+    if (lastStatus?.state === 'queued' || lastStatus?.state === 'updating') {
+      $('#deployment-update-badge').textContent = lastStatus.state.toUpperCase();
+      $('#deployment-update-status').textContent = `Dashboard reconnecting during update. Last reported stage: ${lastStatus.message}`;
+      $('#update-website').disabled = true;
+      $('#update-website').textContent = 'Update in progress…';
+      return;
+    }
     $('#deployment-update-badge').textContent = 'STATUS UNAVAILABLE';
     $('#deployment-update-status').textContent = error.message;
     $('#update-website').disabled = true;
@@ -148,6 +157,7 @@ async function triggerWebsiteUpdate() {
     const result = await api('/api/admin/deployment-update', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
     });
+    state.deploymentUpdateStatus = result.status;
     $('#deployment-update-status').textContent = result.status.message;
     showMessage('GitHub update queued. This page will show its progress.');
     await loadDeploymentUpdateStatus();
