@@ -24,6 +24,10 @@ export interface IncidentPostPublisher {
   publishIncident(incident: XIncidentPost): Promise<XPostResult>;
 }
 
+export interface XIntegrationTester {
+  publishTestPost(): Promise<XPostResult>;
+}
+
 export type XPublisherCredentials =
   | { kind: 'oauth2-user'; userAccessToken: string }
   | { kind: 'oauth1-user'; consumerKey: string; consumerSecret: string; accessToken: string; accessTokenSecret: string };
@@ -73,7 +77,7 @@ function weightedCharacters(value: string): number {
   return total;
 }
 
-export class XApiIncidentPublisher implements IncidentPostPublisher {
+export class XApiIncidentPublisher implements IncidentPostPublisher, XIntegrationTester {
   constructor(
     private readonly credentials: XPublisherCredentials,
     private readonly fetcher: typeof fetch = fetch
@@ -83,6 +87,14 @@ export class XApiIncidentPublisher implements IncidentPostPublisher {
     const text = formatXIncidentPost(incident);
     if (!text) throw new Error('Formatted incident post exceeds the X 280-character limit.');
 
+    return this.createPost(text);
+  }
+
+  async publishTestPost(): Promise<XPostResult> {
+    return this.createPost(`NYC Alert X integration test · This is a test post. #NYCAlert · ${new Date().toISOString()}`);
+  }
+
+  private async createPost(text: string): Promise<XPostResult> {
     const endpoint = 'https://api.x.com/2/tweets';
     const authorization = this.credentials.kind === 'oauth2-user'
       ? `Bearer ${this.credentials.userAccessToken}`
@@ -101,8 +113,8 @@ export class XApiIncidentPublisher implements IncidentPostPublisher {
       const detail = await response.json().catch(() => ({})) as { title?: unknown; detail?: unknown };
       const reason = typeof detail.detail === 'string' ? detail.detail
         : typeof detail.title === 'string' ? detail.title
-          : `HTTP ${response.status}`;
-      throw new Error(`X create-post request failed: ${reason.slice(0, 240)}`);
+          : 'request rejected';
+      throw new Error(`X create-post request failed (HTTP ${response.status}): ${reason.slice(0, 160)}`);
     }
     const body = await response.json() as { data?: { id?: unknown } };
     if (typeof body.data?.id !== 'string' || !/^\d{1,19}$/.test(body.data.id)) {
@@ -133,14 +145,18 @@ function createOAuth1AuthorizationHeader(
   };
   const normalizedParameters = Object.entries(oauthParameters)
     .map(([key, value]) => [percentEncode(key), percentEncode(value)] as const)
-    .sort(([leftKey, leftValue], [rightKey, rightValue]) => leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue))
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) => compareOAuthParameter(leftKey, rightKey) || compareOAuthParameter(leftValue, rightValue))
     .map(([key, value]) => `${key}=${value}`)
     .join('&');
   const signatureBase = [method.toUpperCase(), percentEncode(endpoint), percentEncode(normalizedParameters)].join('&');
   const signingKey = `${percentEncode(credentials.consumerSecret)}&${percentEncode(credentials.accessTokenSecret)}`;
   oauthParameters.oauth_signature = createHmac('sha1', signingKey).update(signatureBase).digest('base64');
   return `OAuth ${Object.entries(oauthParameters)
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => compareOAuthParameter(left, right))
     .map(([key, value]) => `${percentEncode(key)}="${percentEncode(value)}"`)
     .join(', ')}`;
+}
+
+function compareOAuthParameter(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

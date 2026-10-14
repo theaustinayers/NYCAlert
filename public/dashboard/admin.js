@@ -42,6 +42,7 @@ async function init() {
   $('#learning-search').addEventListener('input', renderLearningEvents);
   $('#update-website').addEventListener('click', triggerWebsiteUpdate);
   $('#refresh-update-status').addEventListener('click', () => loadDeploymentUpdateStatus(true));
+  $('#test-x-integration').addEventListener('click', testXIntegration);
   $('#create-incident').addEventListener('click', () => openIncidentEditor());
   $('#incident-form').addEventListener('submit', saveIncident);
   $('#incident-form').addEventListener('click', (event) => { if (event.target.value === 'cancel') $('#incident-editor').close(); });
@@ -164,6 +165,30 @@ async function triggerWebsiteUpdate() {
   } catch (error) {
     showMessage(error.message, true);
     await loadDeploymentUpdateStatus();
+  }
+}
+
+async function testXIntegration() {
+  if (!confirm('Publish one clearly labeled public test post to the connected X account now?')) return;
+  const button = $('#test-x-integration');
+  const status = $('#x-test-status');
+  button.disabled = true;
+  button.textContent = 'Posting test…';
+  status.classList.remove('error');
+  status.textContent = 'Sending test post to X…';
+  try {
+    const result = await api('/api/admin/x-test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    status.textContent = `${result.message} Post: ${result.url}`;
+    showMessage('X integration test post published.');
+  } catch (error) {
+    status.classList.add('error');
+    status.textContent = `X test failed: ${error.message}`;
+    showMessage('X integration test failed; see its diagnostic line in Settings.', true);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Post test message to X';
   }
 }
 

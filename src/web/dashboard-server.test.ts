@@ -170,6 +170,65 @@ describe('DashboardServer account routes', () => {
     }
   });
 
+  it('allows only same-origin administrators to publish an X test post and returns a diagnostic on failure', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const accounts = new AccountStore(join(testDirectory, 'x-test-admin'));
+    let failTestPost = false;
+    let postCount = 0;
+    const xTester = {
+      async publishTestPost() {
+        postCount += 1;
+        if (failTestPost) throw new Error('X create-post request failed (HTTP 403): write permission denied.');
+        return { postId: '123456789', text: 'NYC Alert X integration test.', url: 'https://x.com/i/web/status/123456789' };
+      }
+    };
+    const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
+      publicUrl: origin,
+      trustProxy: false,
+      adminEmail: 'x-admin@example.test',
+      adminPassword: 'test-x-admin-password',
+      smtpPort: 587,
+      smtpSecure: false,
+      smtpFrom: 'noreply@example.test'
+    }, undefined, undefined, undefined, xTester);
+    await server.start();
+    try {
+      const denied = await fetch(`${origin}/api/admin/x-test`, { method: 'POST', headers: { Origin: origin } });
+      assert.equal(denied.status, 401);
+      assert.equal(postCount, 0);
+
+      const login = await fetch(`${origin}/api/auth/login`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'x-admin@example.test', password: 'test-x-admin-password' })
+      });
+      assert.equal(login.status, 200);
+      const cookie = login.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(cookie);
+
+      const crossOrigin = await fetch(`${origin}/api/admin/x-test`, {
+        method: 'POST', headers: { Origin: 'https://evil.example', Cookie: cookie }
+      });
+      assert.equal(crossOrigin.status, 403);
+      assert.equal(postCount, 0);
+
+      const succeeded = await fetch(`${origin}/api/admin/x-test`, {
+        method: 'POST', headers: { Origin: origin, Cookie: cookie }
+      });
+      assert.equal(succeeded.status, 200);
+      assert.equal((await succeeded.json() as { url: string }).url, 'https://x.com/i/web/status/123456789');
+      assert.equal(postCount, 1);
+
+      failTestPost = true;
+      const failed = await fetch(`${origin}/api/admin/x-test`, {
+        method: 'POST', headers: { Origin: origin, Cookie: cookie }
+      });
+      assert.equal(failed.status, 502);
+      assert.match((await failed.json() as { error: string }).error, /write permission denied/);
+      assert.equal(postCount, 2);
+    } finally { await server.stop(); }
+  });
+
   it('sends the branded HTML verification email with NYC Alert sender identity', async () => {
     const smtp = await smtpTestServer();
     const port = await availablePort();

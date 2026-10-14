@@ -12,6 +12,7 @@ import type { AccountStore, AccountStatus, AccountWebhook, AudienceAccountType }
 import type { SiteSettings, SiteSettingsStore } from '../storage/site-settings-store.js';
 import type { LearningLog } from '../services/learning-log.js';
 import type { DeploymentUpdater } from '../services/deployment-updater.js';
+import type { XIntegrationTester } from '../providers/x-post.js';
 import { logger } from '../logger.js';
 
 export interface DashboardAuthConfig {
@@ -98,7 +99,8 @@ export class DashboardServer {
     private readonly authConfig?: DashboardAuthConfig,
     private readonly siteSettings?: SiteSettingsStore,
     private readonly learningLog?: LearningLog,
-    private readonly deploymentUpdater?: DeploymentUpdater
+    private readonly deploymentUpdater?: DeploymentUpdater,
+    private readonly xIntegrationTester?: XIntegrationTester
   ) {}
 
   setPendingIncidentAdminHandlers(
@@ -422,6 +424,10 @@ export class DashboardServer {
         json(response, 403, { error: 'Only administrators can run website updates.' });
         return true;
       }
+      if (url.pathname.startsWith('/api/admin/x-test') && !isAdmin) {
+        json(response, 403, { error: 'Only administrators can test X integration.' });
+        return true;
+      }
       if (mutating && (url.pathname.startsWith('/api/admin/incidents') || url.pathname.startsWith('/api/admin/accounts')) && !canModerate) {
         json(response, 403, { error: 'Reviewer accounts have read-only access.' });
         return true;
@@ -455,6 +461,25 @@ export class DashboardServer {
           logger.warn({ action: 'github-update-requested', actorId: adminSession.account?.id ?? 'bootstrap-admin' }, 'Admin requested GitHub update');
           json(response, 202, { status });
         } catch (error) { json(response, 409, { error: error instanceof Error ? error.message : 'Could not queue update.' }); }
+        return true;
+      }
+      if (url.pathname === '/api/admin/x-test') {
+        if (request.method !== 'POST') { json(response, 405, { error: 'Method not allowed.' }); return true; }
+        if (!this.hasSameOrigin(request)) { json(response, 403, { error: 'Request origin was not accepted.' }); return true; }
+        if (!this.xIntegrationTester) { json(response, 503, { error: 'X user-post credentials are not configured in the running service.' }); return true; }
+        if (!this.takeRateLimit(request, 'admin-x-test', 3, 10 * 60_000)) {
+          json(response, 429, { error: 'X test posting is rate-limited. Try again in 10 minutes.' });
+          return true;
+        }
+        try {
+          const result = await this.xIntegrationTester.publishTestPost();
+          logger.info({ action: 'admin-x-test-post-created', actorId: adminSession.account?.id ?? 'bootstrap-admin', postId: result.postId }, 'Administrator verified X posting integration');
+          json(response, 200, { ok: true, postId: result.postId, url: result.url, message: 'Test post published successfully.' });
+        } catch (error) {
+          const message = error instanceof Error ? error.message.slice(0, 300) : 'X test post failed.';
+          logger.warn({ action: 'admin-x-test-post-failed', actorId: adminSession.account?.id ?? 'bootstrap-admin', error: message }, 'Administrator X integration test failed');
+          json(response, 502, { error: message });
+        }
         return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/learning-log') {

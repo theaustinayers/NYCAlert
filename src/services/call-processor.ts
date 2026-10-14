@@ -518,8 +518,8 @@ export class CallProcessor {
       correlation: { candidateCount: candidates.length, pendingMatchCount: pendingMatches.length, incidentId: incident.id }
     });
 
-    const xPostTask = this.incidentPublisher && publicQualified
-      ? this.incidentPublisher.publishIncident({
+    if (this.incidentPublisher && publicQualified) {
+      void this.incidentPublisher.publishIncident({
           id: incident.id,
           headline: triage.headline ?? incident.title.split(' | ')[0] ?? 'Incident',
           ...(triage.incidentType ? { incidentType: triage.incidentType } : {}),
@@ -531,6 +531,7 @@ export class CallProcessor {
           newsworthinessScore: incident.newsworthinessScore,
           incidentUrl: `${this.publicUrl}/incident/${encodeURIComponent(incident.id)}`
         }).then((posted) => {
+          logger.info({ incidentId: incident.id, callId: call.id, postId: posted.postId }, 'Published incident to X');
           this.recordLearning(call, trace, 'x-publishing', {
             incidentId: incident.id,
             disposition: 'x-post-created',
@@ -543,8 +544,8 @@ export class CallProcessor {
             disposition: 'x-post-failed',
             error: { name: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) }
           });
-        })
-      : undefined;
+        });
+    }
 
     const destinations = new Map<string, AlertSubscription[]>();
     for (const subscription of eligibleSubscriptions) {
@@ -614,7 +615,6 @@ export class CallProcessor {
         destinations: destinationResults
       }
     });
-    await xPostTask;
     return 'alert';
   }
 

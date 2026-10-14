@@ -24,6 +24,17 @@ const accountStore = new AccountStore(config.dataDir);
 const siteSettingsStore = new SiteSettingsStore(config.dataDir);
 const learningLog = new LearningLog(config.dataDir, config.aiLearningLogEnabled, config.aiLearningLogRetentionDays, config.aiLearningLogMaxEvents);
 const deploymentUpdater = new DeploymentUpdater(config.dataDir);
+const xPublisher = config.xUserAccessToken
+  ? new XApiIncidentPublisher({ kind: 'oauth2-user', userAccessToken: config.xUserAccessToken })
+  : config.xOAuthConsumerKey && config.xOAuthConsumerSecret && config.xOAuthAccessToken && config.xOAuthAccessTokenSecret
+    ? new XApiIncidentPublisher({
+      kind: 'oauth1-user',
+      consumerKey: config.xOAuthConsumerKey,
+      consumerSecret: config.xOAuthConsumerSecret,
+      accessToken: config.xOAuthAccessToken,
+      accessTokenSecret: config.xOAuthAccessTokenSecret
+    })
+    : undefined;
 const dashboardStore = new DashboardStore(config.dashboardPublicAudio, 300, config.dashboardPublicTranscripts);
 const dashboard = new DashboardServer(dashboardStore, config.dashboardPort, config.dashboardHost, config.applicationId, accountStore, {
   publicUrl: config.dashboardPublicUrl,
@@ -36,7 +47,7 @@ const dashboard = new DashboardServer(dashboardStore, config.dashboardPort, conf
   smtpUsername: config.smtpUsername,
   smtpPassword: config.smtpPassword,
   smtpFrom: config.smtpFrom
-}, siteSettingsStore, learningLog, deploymentUpdater);
+}, siteSettingsStore, learningLog, deploymentUpdater, xPublisher);
 const incidentGeocoder = new NominatimIncidentGeocoder(config.mapGeocoderContact);
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 let feedPoller: CallFeedPoller | undefined;
@@ -45,6 +56,15 @@ let staticStreamMonitor: BroadcastifyStaticStreamMonitor | undefined;
 await store.init();
 await learningLog.init();
 await dashboard.start();
+
+if (!config.xAutoPostEnabled) {
+  logger.info('X incident auto-posting is disabled');
+} else {
+  const xAuthMode = config.xUserAccessToken ? 'oauth2-user'
+    : config.xOAuthConsumerKey && config.xOAuthConsumerSecret && config.xOAuthAccessToken && config.xOAuthAccessTokenSecret ? 'oauth1-user'
+      : 'missing-credentials';
+  logger.info({ xAuthMode }, 'X incident auto-posting configuration loaded');
+}
 
 client.once(Events.ClientReady, async (readyClient) => {
   logger.info({ user: readyClient.user.tag }, 'Discord bot is ready');
@@ -85,18 +105,7 @@ client.once(Events.ClientReady, async (readyClient) => {
       new WhisperCppTranscriber(config.whisperModelPath, config.whisperExecutablePath, config.whisperThreads, undefined, config.ffmpegPath),
       new OpenAiTriageProvider(config.openAiApiKey, config.triageModel)
     );
-    const xPublisher = config.xAutoPostEnabled && config.xUserAccessToken
-      ? new XApiIncidentPublisher({ kind: 'oauth2-user', userAccessToken: config.xUserAccessToken })
-      : config.xAutoPostEnabled && config.xOAuthConsumerKey && config.xOAuthConsumerSecret && config.xOAuthAccessToken && config.xOAuthAccessTokenSecret
-        ? new XApiIncidentPublisher({
-          kind: 'oauth1-user',
-          consumerKey: config.xOAuthConsumerKey,
-          consumerSecret: config.xOAuthConsumerSecret,
-          accessToken: config.xOAuthAccessToken,
-          accessTokenSecret: config.xOAuthAccessTokenSecret
-        })
-        : undefined;
-    const processor = new CallProcessor(client, store, analysis, dashboardStore, config.broadcastifyAudioRedistributionAllowed, 0.78, config.newsworthinessThreshold, incidentGeocoder, config.buffInterestThreshold, config.newsMediaDeskThreshold, learningLog, xPublisher, config.dashboardPublicUrl);
+    const processor = new CallProcessor(client, store, analysis, dashboardStore, config.broadcastifyAudioRedistributionAllowed, 0.78, config.newsworthinessThreshold, incidentGeocoder, config.buffInterestThreshold, config.newsMediaDeskThreshold, learningLog, config.xAutoPostEnabled ? xPublisher : undefined, config.dashboardPublicUrl);
     dashboard.setPendingIncidentAdminHandlers(
       () => processor.listPendingIncidents(),
       (pendingId) => processor.discardPendingIncident(pendingId),
