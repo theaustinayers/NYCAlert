@@ -21,6 +21,7 @@ export interface CallTriage {
   /** Exact address or cross streets explicitly heard in the transcript, never inferred. */
   location?: string;
   incidentType?: IncidentType;
+  /** Confidence that the transcript supports this triage and its extracted facts; not ASR quality or incident verification. */
   confidence: number;
   /** Public/editorial value; this remains the score used for Discord routing. */
   newsworthinessScore: number;
@@ -105,9 +106,9 @@ export interface RadioCall {
   sourcePosition?: number;
 }
 
-export function shouldNotify(result: CallTriage, minConfidence = 0.78, minNewsworthiness = 4): boolean {
+export function shouldNotify(result: CallTriage, minTriageConfidence = 0.78, minNewsworthiness = 4): boolean {
   return result.shouldAlert
     && result.category !== 'routine'
-    && result.confidence >= minConfidence
+    && result.confidence >= minTriageConfidence
     && result.newsworthinessScore >= minNewsworthiness;
 }

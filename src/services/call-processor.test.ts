@@ -125,6 +125,9 @@ describe('CallProcessor', () => {
     assert.equal(related.filter((event) => event.transcript !== undefined).length, 1);
     assert.equal(related.find((event) => event.stage === 'transcription')?.transcript, transcript);
     assert.ok(related.some((event) => event.stage === 'triage' && event.scores?.buff === 5));
+    const triageEvent = related.find((event) => event.stage === 'triage');
+    assert.equal(triageEvent?.confidenceKind, 'triage-evidence-fit');
+    assert.deepEqual(triageEvent?.thresholds, { triageConfidence: 0.78, public: 4, buff: 4, newsMedia: 4 });
     assert.ok(related.some((event) => event.stage === 'geocoding' && event.geocode?.matched));
     assert.ok(related.some((event) => event.stage === 'correlation'));
     assert.ok(related.some((event) => event.stage === 'incident-published'));

@@ -75,6 +75,7 @@ interface LearningTrace {
   category?: string;
   incidentType?: string;
   confidence?: number;
+  confidenceKind?: LearningEvent['confidenceKind'];
   scores?: LearningEvent['scores'];
   qualifications?: LearningEvent['qualifications'];
   location?: string;
@@ -93,7 +94,7 @@ export class CallProcessor {
     private readonly analysis: CallAnalysisProvider,
     private readonly dashboard: DashboardStore,
     private readonly allowAudioRedistribution = false,
-    private readonly minConfidence = 0.78,
+    private readonly minTriageConfidence = 0.78,
     private readonly minNewsworthiness = 4,
     private readonly geocoder?: IncidentGeocoder,
     private readonly minBuffInterest = 4,
@@ -252,15 +253,16 @@ export class CallProcessor {
     trace.category = triage.category;
     trace.incidentType = triage.incidentType;
     trace.confidence = triage.confidence;
+    trace.confidenceKind = 'triage-evidence-fit';
     const unitAssignments = extractActingAsAssignments(transcript);
     const unitIds = extractUnitIds(transcript);
     const boxNumbers = call.agency === 'FDNY' ? extractBoxNumbers(transcript) : [];
-    const publicQualified = shouldNotify(triage, this.minConfidence, this.minNewsworthiness);
+    const publicQualified = shouldNotify(triage, this.minTriageConfidence, this.minNewsworthiness);
     const buffQualified = triage.category !== 'routine'
-      && triage.confidence >= this.minConfidence
+      && triage.confidence >= this.minTriageConfidence
       && (triage.buffInterestScore ?? triage.newsworthinessScore) >= this.minBuffInterest;
     const newsDeskQualified = triage.category !== 'routine'
-      && triage.confidence >= this.minConfidence
+      && triage.confidence >= this.minTriageConfidence
       && (triage.assignmentDeskScore ?? triage.newsworthinessScore) >= this.minNewsMediaDesk;
     const qualifiesAsIncident = publicQualified || buffQualified || newsDeskQualified;
     trace.scores = { public: triage.newsworthinessScore, buff: triage.buffInterestScore ?? triage.newsworthinessScore, newsMedia: triage.assignmentDeskScore ?? triage.newsworthinessScore };
@@ -272,8 +274,9 @@ export class CallProcessor {
       category: triage.category,
       incidentType: triage.incidentType,
       confidence: triage.confidence,
+      confidenceKind: trace.confidenceKind,
       scores: trace.scores,
-      thresholds: { confidence: this.minConfidence, public: this.minNewsworthiness, buff: this.minBuffInterest, newsMedia: this.minNewsMediaDesk },
+      thresholds: { triageConfidence: this.minTriageConfidence, public: this.minNewsworthiness, buff: this.minBuffInterest, newsMedia: this.minNewsMediaDesk },
       qualifications: trace.qualifications,
       location: triage.location,
       units: unitIds,
@@ -599,6 +602,7 @@ export class CallProcessor {
         : (details.category ?? trace.category) ? 'incident' : 'unclassified',
       ...(trace.incidentType ? { incidentType: trace.incidentType } : {}),
       ...(trace.confidence !== undefined ? { confidence: trace.confidence } : {}),
+      ...(trace.confidenceKind ? { confidenceKind: trace.confidenceKind } : {}),
       ...(trace.scores ? { scores: trace.scores } : {}),
       ...(trace.qualifications ? { qualifications: trace.qualifications } : {}),
       ...(trace.location ? { location: trace.location } : {}),
@@ -708,7 +712,7 @@ function buildIncidentEmbed(incident: DashboardIncident): EmbedBuilder {
       { name: 'Newsworthiness', value: `${incident.newsworthinessScore}/5`, inline: true },
       { name: 'Buff interest', value: `${incident.buffInterestScore}/5`, inline: true },
       { name: 'Assignment desk', value: `${incident.assignmentDeskScore}/5`, inline: true },
-      { name: 'Confidence', value: `${Math.round(incident.confidence * 100)}%`, inline: true },
+      { name: 'Triage evidence fit', value: `${Math.round(incident.confidence * 100)}%`, inline: true },
       { name: 'Updates', value: String(incident.updateCount), inline: true }
     )
     .setFooter({ text: 'AI-assisted radio summary; verify details independently.' });

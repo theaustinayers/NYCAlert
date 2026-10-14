@@ -192,13 +192,15 @@ function renderLearningEvents() {
     records.sort((left, right) => Date.parse(left.loggedAt) - Date.parse(right.loggedAt));
     const event = records.find((record) => record.stage === 'transcription' && record.transcript) || records[0];
     const latest = records.at(-1);
+    const triage = [...records].reverse().find((record) => record.stage === 'triage') || latest;
     const path = latest.workflowPath || records.map((record) => record.stage);
     const facts = [
       ['Traffic type', latest.trafficType === 'routine' ? 'Routine traffic · non-incident' : latest.trafficType === 'incident' ? 'Incident-classified call' : 'Awaiting triage classification'],
       ['Source', `${event.agency || '—'} · ${event.sourceGroup || 'Radio'} · ${event.feedBorough || '—'}`],
       ['Triage', `${latest.headline || event.headline || '—'} · ${latest.category || event.category || '—'}`],
-      ['Scores', latest.scores ? `Public ${latest.scores.public}/5 · Buff ${latest.scores.buff}/5 · News ${latest.scores.newsMedia}/5` : '—'],
-      ['Thresholds', latest.thresholds ? `Conf ${latest.thresholds.confidence} · Public ${latest.thresholds.public} · Buff ${latest.thresholds.buff} · News ${latest.thresholds.newsMedia}` : '—'],
+      ['Triage confidence', typeof triage.confidence === 'number' ? `${Math.round(triage.confidence * 100)}% · ${triage.confidenceKind === 'triage-evidence-fit' ? 'transcript evidence fit, not transcription quality or incident verification' : 'legacy value; meaning was not explicitly labeled'}` : '—'],
+      ['Scores', triage.scores ? `Public ${triage.scores.public}/5 · Buff ${triage.scores.buff}/5 · News ${triage.scores.newsMedia}/5` : '—'],
+      ['Thresholds', triage.thresholds ? `Triage fit ${triage.thresholds.triageConfidence ?? triage.thresholds.confidence ?? '—'} · Public ${triage.thresholds.public} · Buff ${triage.thresholds.buff} · News ${triage.thresholds.newsMedia}` : '—'],
       ['Location', latest.location || event.location || 'Not stated'],
       ['Geocoding', latest.geocode ? `${latest.geocode.matched ? 'Matched' : latest.geocode.attempted ? 'No match' : 'Not attempted'}${latest.geocode.borough ? ` · ${latest.geocode.borough}` : ''}${latest.geocode.latitude ? ` · ${latest.geocode.latitude}, ${latest.geocode.longitude}` : ''}` : '—'],
       ['Correlation', latest.correlation ? `${latest.disposition || 'Decision'} · ${latest.correlation.candidateCount} candidates${latest.correlation.incidentId ? ` · ${latest.correlation.incidentId}` : ''}` : latest.disposition || '—'],

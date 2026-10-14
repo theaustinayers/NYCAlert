@@ -44,8 +44,9 @@ export interface LearningEvent {
   trafficType?: 'routine' | 'incident' | 'unclassified';
   incidentType?: string;
   confidence?: number;
+  confidenceKind?: 'triage-evidence-fit';
   scores?: { public: number; buff: number; newsMedia: number };
-  thresholds?: { confidence: number; public: number; buff: number; newsMedia: number };
+  thresholds?: { triageConfidence?: number; confidence?: number; public: number; buff: number; newsMedia: number };
   qualifications?: { public: boolean; buff: boolean; newsMedia: boolean };
   routing?: {
     eligibleSubscriptions: number;
