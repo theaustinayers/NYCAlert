@@ -74,6 +74,9 @@ describe('DashboardServer account routes', () => {
     const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1');
     await server.start();
     try {
+      const home = await fetch(`${origin}/`);
+      assert.equal(home.status, 200);
+      assert.match(await home.text(), /href="https:\/\/discord\.gg\/EgkhPSZqtN"[^>]*>Join Our Discord<\/a>/);
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
@@ -322,6 +325,7 @@ describe('DashboardServer account routes', () => {
       assert.match(html, /property="og:image" content="https:\/\/nycalert\.ai\/logo\.svg"/);
       assert.match(html, /name="twitter:card" content="summary_large_image"/);
       assert.match(html, /rel="canonical" href="https:\/\/nycalert\.ai\/incident\//);
+      assert.match(html, /href="https:\/\/discord\.gg\/EgkhPSZqtN"[^>]*>Join Our Discord<\/a>/);
     } finally { await server.stop(); }
   });
 });
