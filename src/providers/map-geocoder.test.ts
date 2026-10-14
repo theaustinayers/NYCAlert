@@ -57,6 +57,53 @@ describe('NominatimIncidentGeocoder', () => {
     assert.equal(queries[0], '54 West 103rd Street, Manhattan, New York City, NY');
   });
 
+  it('rejects a direct address pin that contradicts the explicitly stated cross-street segment', async () => {
+    const geocoder = new NominatimIncidentGeocoder(undefined, async (input) => {
+      const query = new URL(String(input)).searchParams.get('q') ?? '';
+      if (query.startsWith('396 10 Avenue,')) return new Response(JSON.stringify([{
+        lat: '40.75', lon: '-73.99',
+        address: { house_number: '396', road: '10 Avenue', suburb: 'Manhattan' }
+      }]));
+      if (query.startsWith('10 Avenue and West 207th Street')) return new Response(JSON.stringify([{
+        lat: '40.863', lon: '-73.929', address: { road: '10 Avenue', suburb: 'Manhattan' }
+      }]));
+      if (query.startsWith('10 Avenue and West 215th Street')) return new Response(JSON.stringify([{
+        lat: '40.869', lon: '-73.926', address: { road: '10 Avenue', suburb: 'Manhattan' }
+      }]));
+      return new Response('[]');
+    });
+
+    const coordinates = await geocoder.geocode(
+      '396 10 Avenue between West 207th Street and West 215th Street',
+      'Manhattan'
+    );
+
+    assert.equal(coordinates, undefined);
+  });
+
+  it('keeps a verified direct address when it lies on the explicit cross-street segment', async () => {
+    const direct = { latitude: 40.866, longitude: -73.927 };
+    const geocoder = new NominatimIncidentGeocoder(undefined, async (input) => {
+      const query = new URL(String(input)).searchParams.get('q') ?? '';
+      if (query.startsWith('3961 10th Avenue,')) return new Response(JSON.stringify([{
+        lat: String(direct.latitude), lon: String(direct.longitude),
+        address: { house_number: '3961', road: '10th Avenue', suburb: 'Manhattan' }
+      }]));
+      if (query.startsWith('10th Avenue and West 207th Street')) return new Response(JSON.stringify([{
+        lat: '40.863', lon: '-73.929', address: { road: '10th Avenue', suburb: 'Manhattan' }
+      }]));
+      if (query.startsWith('10th Avenue and West 215th Street')) return new Response(JSON.stringify([{
+        lat: '40.869', lon: '-73.926', address: { road: '10th Avenue', suburb: 'Manhattan' }
+      }]));
+      return new Response('[]');
+    });
+
+    assert.deepEqual(
+      await geocoder.geocode('3961 10th Avenue between West 207th Street and West 215th Street', 'Manhattan'),
+      direct
+    );
+  });
+
   it('rejects a direct geocoder result whose borough or street does not match', async () => {
     const wrongBorough = new NominatimIncidentGeocoder(undefined, async () => new Response(JSON.stringify([{
       lat: '40.7964623', lon: '-73.9624967',

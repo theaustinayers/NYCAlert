@@ -50,11 +50,10 @@ export class NominatimIncidentGeocoder {
   private async request(location: string, borough: string): Promise<MapCoordinates | undefined> {
     const directLocation = stripTrailingBorough(location.replace(/\s+\bbetween\b\s+.+$/i, '').replace(/[,;\s]+$/g, '').trim());
     const direct = await this.search(`${directLocation}, ${borough}, New York City, NY`, 5);
-    const directMatch = direct.map((result) => verifiedDirectCoordinates(result, directLocation, borough)).find(isCoordinates);
-    if (directMatch) return directMatch;
-
     const block = parseBetweenBlock(location);
-    if (!block) return undefined;
+    const directMatches = direct.map((result) => verifiedDirectCoordinates(result, directLocation, borough)).filter(isCoordinates);
+    if (!block) return directMatches[0];
+
     const firstIntersectionResults = await this.search(
       `${block.street} and ${block.firstCrossStreet}, ${borough}, New York City, NY`, 5
     );
@@ -63,6 +62,16 @@ export class NominatimIncidentGeocoder {
     );
     const firstIntersection = firstIntersectionResults.map((result) => coordinatesInBorough(result, borough)).find(isCoordinates);
     const secondIntersection = secondIntersectionResults.map((result) => coordinatesInBorough(result, borough)).find(isCoordinates);
+    if (firstIntersection && secondIntersection) {
+      const consistentDirectMatches = directMatches.filter((candidate) =>
+        liesAlongCrossStreetSegment(candidate, firstIntersection, secondIntersection)
+      );
+      if (consistentDirectMatches.length === 1) return consistentDirectMatches[0];
+      if (consistentDirectMatches.length > 1) return undefined;
+    } else if (directMatches.length > 0) {
+      return directMatches.length === 1 ? directMatches[0] : undefined;
+    }
+
     if (firstIntersection && secondIntersection && distanceMeters(firstIntersection, secondIntersection) <= 500) {
       return {
         latitude: (firstIntersection.latitude + secondIntersection.latitude) / 2,
@@ -103,6 +112,28 @@ export class NominatimIncidentGeocoder {
     if (!response.ok) throw new Error(`Incident map geocoding failed with HTTP ${response.status}`);
     return await response.json() as GeocoderResult[];
   }
+}
+
+/** Reject a direct-address pin when it conflicts with an explicitly stated between-block. */
+function liesAlongCrossStreetSegment(
+  candidate: MapCoordinates,
+  first: MapCoordinates,
+  second: MapCoordinates,
+  toleranceMeters = 250
+): boolean {
+  const meanLatitude = (first.latitude + second.latitude + candidate.latitude) / 3;
+  const metersPerDegreeLongitude = 111_320 * Math.cos(meanLatitude * Math.PI / 180);
+  const origin = { x: first.longitude * metersPerDegreeLongitude, y: first.latitude * 111_320 };
+  const end = { x: second.longitude * metersPerDegreeLongitude, y: second.latitude * 111_320 };
+  const point = { x: candidate.longitude * metersPerDegreeLongitude, y: candidate.latitude * 111_320 };
+  const dx = end.x - origin.x;
+  const dy = end.y - origin.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return distanceMeters(candidate, first) <= toleranceMeters;
+  const projection = ((point.x - origin.x) * dx + (point.y - origin.y) * dy) / lengthSquared;
+  if (projection < 0 || projection > 1) return false;
+  const closest = { x: origin.x + projection * dx, y: origin.y + projection * dy };
+  return Math.hypot(point.x - closest.x, point.y - closest.y) <= toleranceMeters;
 }
 
 function stripTrailingBorough(location: string): string {
