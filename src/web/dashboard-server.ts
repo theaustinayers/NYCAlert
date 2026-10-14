@@ -47,6 +47,7 @@ const staticFiles = new Map<string, [string, string]>([
   ['/admin', ['admin.html', 'text/html; charset=utf-8']],
   ['/leaflet.css', ['../../node_modules/leaflet/dist/leaflet.css', 'text/css; charset=utf-8']],
   ['/leaflet.js', ['../../node_modules/leaflet/dist/leaflet.js', 'text/javascript; charset=utf-8']],
+  ['/nyc-alert-wordmark.svg', ['nyc-alert-wordmark.svg', 'image/svg+xml']],
   ['/logo.svg', ['../../nycalert.svg', 'image/svg+xml']]
 ]);
 
