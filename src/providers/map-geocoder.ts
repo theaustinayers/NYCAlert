@@ -1,6 +1,9 @@
+import type { LocationPrecision } from '../domain/location.js';
+
 export interface MapCoordinates {
   latitude: number;
   longitude: number;
+  precision: LocationPrecision;
 }
 
 export function normalizeMapLocation(location: string): string {
@@ -36,7 +39,7 @@ export class NominatimIncidentGeocoder {
 
   geocode(location: string, borough: string): Promise<MapCoordinates | undefined> {
     const normalized = normalizeMapLocation(location);
-    if (!normalized) return Promise.resolve(undefined);
+    if (!normalized || isBoroughOnlyLocation(normalized, borough)) return Promise.resolve(undefined);
     const key = `${normalized.toLowerCase()}|${borough.toLowerCase()}`;
     const cached = this.cache.get(key);
     if (cached) return cached;
@@ -60,13 +63,16 @@ export class NominatimIncidentGeocoder {
     const secondIntersectionResults = await this.search(
       `${block.street} and ${block.secondCrossStreet}, ${borough}, New York City, NY`, 5
     );
-    const firstIntersection = firstIntersectionResults.map((result) => coordinatesInBorough(result, borough)).find(isCoordinates);
-    const secondIntersection = secondIntersectionResults.map((result) => coordinatesInBorough(result, borough)).find(isCoordinates);
+    const firstIntersection = firstIntersectionResults.map((result) => coordinatesInBorough(result, borough, 'road_segment')).find(isCoordinates);
+    const secondIntersection = secondIntersectionResults.map((result) => coordinatesInBorough(result, borough, 'road_segment')).find(isCoordinates);
     if (firstIntersection && secondIntersection) {
       const consistentDirectMatches = directMatches.filter((candidate) =>
         liesAlongCrossStreetSegment(candidate, firstIntersection, secondIntersection)
       );
-      if (consistentDirectMatches.length === 1) return consistentDirectMatches[0];
+      if (consistentDirectMatches.length === 1) {
+        const match = consistentDirectMatches[0]!;
+        return match.precision === 'street_address' ? match : { ...match, precision: 'road_segment' };
+      }
       if (consistentDirectMatches.length > 1) return undefined;
     } else if (directMatches.length > 0) {
       return directMatches.length === 1 ? directMatches[0] : undefined;
@@ -75,7 +81,8 @@ export class NominatimIncidentGeocoder {
     if (firstIntersection && secondIntersection && distanceMeters(firstIntersection, secondIntersection) <= 500) {
       return {
         latitude: (firstIntersection.latitude + secondIntersection.latitude) / 2,
-        longitude: (firstIntersection.longitude + secondIntersection.longitude) / 2
+        longitude: (firstIntersection.longitude + secondIntersection.longitude) / 2,
+        precision: 'road_segment'
       };
     }
 
@@ -84,7 +91,7 @@ export class NominatimIncidentGeocoder {
     const secondCrossStreetResults = await this.search(`${block.secondCrossStreet}, ${borough}, New York City, NY`, 50);
     const firstCrossStreets = firstCrossStreetResults.map((result) => coordinatesInBorough(result, borough)).filter(isCoordinates);
     const secondCrossStreets = secondCrossStreetResults.map((result) => coordinatesInBorough(result, borough)).filter(isCoordinates);
-    const matchingRoads = streetResults.filter((result) => resultInBorough(result, borough)).map(coordinatesFrom).filter(isCoordinates).filter((street) =>
+    const matchingRoads = streetResults.filter((result) => resultInBorough(result, borough)).map((result) => coordinatesFrom(result, 'road_segment')).filter(isCoordinates).filter((street) =>
       firstCrossStreets.some((first) => distanceMeters(street, first) <= 250)
       && secondCrossStreets.some((second) => distanceMeters(street, second) <= 250)
     );
@@ -145,6 +152,8 @@ interface GeocoderResult {
   lon?: string;
   name?: string;
   display_name?: string;
+  type?: string;
+  addresstype?: string;
   address?: {
     house_number?: string;
     road?: string;
@@ -156,20 +165,20 @@ interface GeocoderResult {
   };
 }
 
-function coordinatesFrom(result?: GeocoderResult): MapCoordinates | undefined {
+function coordinatesFrom(result?: GeocoderResult, precision: LocationPrecision = 'place'): MapCoordinates | undefined {
   const latitude = Number(result?.lat);
   const longitude = Number(result?.lon);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
     || latitude < 40.45 || latitude > 40.95 || longitude < -74.30 || longitude > -73.65) return undefined;
-  return { latitude, longitude };
+  return { latitude, longitude, precision };
 }
 
 function isCoordinates(value: MapCoordinates | undefined): value is MapCoordinates {
   return value !== undefined;
 }
 
-function coordinatesInBorough(result: GeocoderResult, borough: string): MapCoordinates | undefined {
-  return resultInBorough(result, borough) ? coordinatesFrom(result) : undefined;
+function coordinatesInBorough(result: GeocoderResult, borough: string, precision: LocationPrecision = 'place'): MapCoordinates | undefined {
+  return resultInBorough(result, borough) ? coordinatesFrom(result, precision) : undefined;
 }
 
 function resultInBorough(result: GeocoderResult, borough: string): boolean {
@@ -208,7 +217,16 @@ function verifiedDirectCoordinates(result: GeocoderResult, query: string, boroug
     const overlap = expected.filter((token) => road.includes(token)).length;
     if (overlap / Math.max(expected.length, road.length) < 0.72) return undefined;
   }
-  return coordinates;
+  const isIntersection = result.addresstype === 'intersection' || result.type === 'intersection';
+  return { ...coordinates, precision: houseMatch ? 'street_address' : isIntersection ? 'intersection' : 'place' };
+}
+
+function isBoroughOnlyLocation(location: string, borough: string): boolean {
+  const normalize = (value: string) => value.toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+  const normalizedLocation = normalize(location);
+  const normalizedBorough = normalize(borough);
+  return normalizedLocation === normalizedBorough
+    || ['citywide', 'city wide', 'nyc', 'new york city'].includes(normalizedLocation);
 }
 
 function normalizeAddressTokens(value: string): string[] {

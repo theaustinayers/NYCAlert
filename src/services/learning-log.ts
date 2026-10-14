@@ -2,12 +2,14 @@ import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 
 import { dirname, join } from 'node:path';
 import type { Agency, Borough } from '../domain/subscriptions.js';
 import type { FdnyTransmissionAnalysis } from '../domain/fdny-radio.js';
+import type { LocationPrecision } from '../domain/location.js';
 
 export type LearningWorkflowStage =
   | 'received'
   | 'transcription'
   | 'transcription-error'
   | 'transcription-ignored'
+  | 'source-duplicate-suppressed'
   | 'repeat-suppressed'
   | 'triage'
   | 'triage-error'
@@ -66,7 +68,7 @@ export interface LearningEvent {
   };
   socialPost?: { provider: 'x'; postId?: string; url?: string };
   location?: string;
-  geocode?: { attempted: boolean; borough?: string; matched: boolean; latitude?: number; longitude?: number; error?: string };
+  geocode?: { attempted: boolean; borough?: string; matched: boolean; precision?: LocationPrecision; latitude?: number; longitude?: number; error?: string };
   units?: string[];
   boxNumbers?: string[];
   correlation?: { candidateCount: number; incidentId?: string; pendingMatchCount?: number };

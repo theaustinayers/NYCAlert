@@ -84,11 +84,13 @@ describe('DashboardStore', () => {
     const incident = await store.publish({
       ...input,
       occurredAt: new Date('2026-10-13T12:00:00Z'),
+      headline: 'Reported Vehicle Crash',
       location: '123 Main Street',
       incidentType: 'vehicle',
       unitIds: ['ENGINE 12']
     });
     const updated = await store.updateIncident(incident.id, {
+      headline: 'Units Returning to Service',
       summary: 'Engine 12 returned to service; Rescue 1 remains on scene.',
       occurredAt: new Date('2026-10-13T12:03:00Z'),
       unitIds: ['ENGINE 12', 'RESCUE 1'],
@@ -98,6 +100,8 @@ describe('DashboardStore', () => {
     });
 
     assert.equal(updated?.updateCount, 1);
+    assert.equal(updated?.title, incident.title);
+    assert.equal(updated?.updates[0]?.headline, 'Units Returning to Service');
     assert.deepEqual(updated?.unitIds, ['ENGINE 12', 'RESCUE 1']);
     assert.equal(updated?.newsworthinessScore, 4);
     assert.equal(updated?.category, 'newsworthy');
@@ -144,9 +148,9 @@ describe('DashboardStore', () => {
 
   it('keeps the 30-minute map window separate from incident search and requires valid NYC coordinates', async () => {
     const store = new DashboardStore(false);
-    await store.publish({ ...input, occurredAt: new Date('2026-10-13T12:00:00Z'), latitude: 40.7, longitude: -73.9, incidentType: 'vehicle' });
+    await store.publish({ ...input, occurredAt: new Date('2026-10-13T12:00:00Z'), latitude: 40.7, longitude: -73.9, locationPrecision: 'street_address', incidentType: 'vehicle' });
     await store.publish({ ...input, title: 'No coordinates', occurredAt: new Date('2026-10-13T12:01:00Z') });
-    await store.publish({ ...input, title: 'Old map record', occurredAt: new Date('2026-10-13T11:00:00Z'), latitude: 40.7, longitude: -73.9 });
+    await store.publish({ ...input, title: 'Old map record', occurredAt: new Date('2026-10-13T11:00:00Z'), latitude: 40.7, longitude: -73.9, locationPrecision: 'street_address' });
 
     assert.equal(store.search().length, 3);
     const mapIncidents = store.listMapIncidents(Date.parse('2026-10-13T12:05:00Z'));
@@ -158,7 +162,7 @@ describe('DashboardStore', () => {
     const store = new DashboardStore(false);
     const changed = await store.publish({
       ...input, title: 'Original incident', headline: 'Original incident', location: '123 Main Street',
-      occurredAt: new Date('2026-10-13T12:00:00Z'), latitude: 40.75, longitude: -73.98
+      occurredAt: new Date('2026-10-13T12:00:00Z'), latitude: 40.75, longitude: -73.98, locationPrecision: 'street_address'
     });
     const edited = await store.adminEditIncident(changed.id, {
       headline: 'Corrected incident location', summary: 'Admin corrected the location.', location: 'Location pending verification'
@@ -173,9 +177,9 @@ describe('DashboardStore', () => {
 
   it('filters incidents and map pins by multiple selected boroughs, including none selected', async () => {
     const store = new DashboardStore(false);
-    await store.publish({ ...input, borough: 'Manhattan', title: 'Manhattan call', occurredAt: new Date('2026-10-13T12:00:00Z'), latitude: 40.75, longitude: -73.98 });
-    await store.publish({ ...input, borough: 'Queens', title: 'Queens call', occurredAt: new Date('2026-10-13T12:01:00Z'), latitude: 40.72, longitude: -73.82 });
-    await store.publish({ ...input, borough: 'Brooklyn', title: 'Brooklyn call', occurredAt: new Date('2026-10-13T12:02:00Z'), latitude: 40.68, longitude: -73.95 });
+    await store.publish({ ...input, borough: 'Manhattan', title: 'Manhattan call', occurredAt: new Date('2026-10-13T12:00:00Z'), latitude: 40.75, longitude: -73.98, locationPrecision: 'street_address' });
+    await store.publish({ ...input, borough: 'Queens', title: 'Queens call', occurredAt: new Date('2026-10-13T12:01:00Z'), latitude: 40.72, longitude: -73.82, locationPrecision: 'street_address' });
+    await store.publish({ ...input, borough: 'Brooklyn', title: 'Brooklyn call', occurredAt: new Date('2026-10-13T12:02:00Z'), latitude: 40.68, longitude: -73.95, locationPrecision: 'street_address' });
 
     assert.deepEqual(store.search('', ['Manhattan', 'Queens']).map((incident) => incident.borough), ['Queens', 'Manhattan']);
     assert.deepEqual(store.listMapIncidents(Date.parse('2026-10-13T12:10:00Z'), 30 * 60 * 1000, ['Queens']).map((incident) => incident.borough), ['Queens']);

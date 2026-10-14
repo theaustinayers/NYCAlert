@@ -64,10 +64,55 @@ export function curateIncidentHeadline(
 export function isGenericIncidentHeadline(headline: string | undefined): boolean {
   const normalized = headline?.trim().toLowerCase().replace(/\s+/g, ' ');
   return !normalized || new Set([
-    'routine update', 'routine unit status update', 'routine incident',
+    'routine', 'routine update', 'routine status update', 'routine unit status update', 'unit status update', 'status update', 'radio status update', 'routine incident',
     'newsworthy incident', 'breaking incident', 'unusual incident', 'unusual radio call',
     'radio transmission', 'dispatch update'
   ]).has(normalized);
+}
+
+/** Replace a generic routine headline only when the transcript literally supports a known status change. */
+export function curateRoutineUpdateHeadline(
+  headline: string | undefined,
+  transcript: string,
+  category: CallTriage['category']
+): string | undefined {
+  if (category !== 'routine' || !isGenericIncidentHeadline(headline)) return headline;
+  const rules: Array<[RegExp, string]> = [
+    [/\b(?:return(?:ing|ed)?\s+to\s+service|back\s+in\s+service)\b/i, 'Units Returning to Service'],
+    [/\bunder control\b/i, 'Conditions Under Control'],
+    [/\bno\s+(?:visible\s+)?fire\s+(?:found|condition)\b/i, 'No Fire Found'],
+    [/\bno\s+(?:visible\s+)?smoke\s+(?:found|condition)\b/i, 'No Smoke Found'],
+    [/\b(?:on scene|arrived on scene)\b/i, 'Unit On Scene'],
+    [/\bpatient\s+transported\b/i, 'Patient Transported'],
+    [/\b(?:assignment|all units?)\s+(?:is\s+)?cancel(?:led|ed)\b|\bdisregard (?:the|that) assignment\b/i, 'Assignment Cancelled']
+  ];
+  return rules.find(([pattern]) => pattern.test(transcript))?.[1] ?? 'Specific Update Unclear';
+}
+
+/** Replace only known generic model summaries with literal, cautious descriptions of explicit radio status. */
+export function curateRoutineUpdateSummary(
+  summary: string | undefined,
+  transcript: string,
+  category: CallTriage['category']
+): string | undefined {
+  if (category !== 'routine') return summary;
+  const normalized = summary?.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
+  const genericSummaries = new Set([
+    'routine', 'routine update', 'routine unit status', 'routine unit status update', 'unit status update',
+    'status update', 'routine radio traffic', 'no reliable summary available'
+  ]);
+  if (!normalized || !genericSummaries.has(normalized)) return summary;
+  const rules: Array<[RegExp, string]> = [
+    [/\b(?:return(?:ing|ed)?\s+to\s+service|back\s+in\s+service)\b/i, 'Radio traffic reports a unit returning to service.'],
+    [/\bunder control\b/i, 'Radio traffic reports conditions under control.'],
+    [/\bno\s+(?:visible\s+)?fire\s+(?:found|condition)\b/i, 'Radio traffic reports no fire found.'],
+    [/\bno\s+(?:visible\s+)?smoke\s+(?:found|condition)\b/i, 'Radio traffic reports no smoke found.'],
+    [/\b(?:on scene|arrived on scene)\b/i, 'A unit reported arriving on scene.'],
+    [/\bpatient\s+transported\b/i, 'Radio traffic reports a patient transported.'],
+    [/\b(?:assignment|all units?)\s+(?:is\s+)?cancel(?:led|ed)\b|\bdisregard (?:the|that) assignment\b/i, 'Radio traffic reports the assignment cancelled or disregarded.']
+  ];
+  return rules.find(([pattern]) => pattern.test(transcript))?.[1]
+    ?? 'Radio update received; the specific change is unclear.';
 }
 
 /** The adopted FDNY editorial rubric assigns third alarm or greater Public 5/5. */

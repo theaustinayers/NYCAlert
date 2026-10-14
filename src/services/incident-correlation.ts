@@ -127,6 +127,38 @@ function sameExplicitAddress(left: IncidentIdentity, right: IncidentIdentity): b
     && sharedNumbers.length >= 2 && sharedStreetTokens.length >= 2;
 }
 
+function explicitStreetAddress(location?: string): { houseNumber: string; street: string } | undefined {
+  if (!location) return undefined;
+  const normalized = location
+    .replace(/\bbetween\b[\s\S]*$/i, '')
+    .replace(/,?\s*(?:Manhattan|Bronx|Queens|Brooklyn|Staten\s+Island)\s*$/i, '')
+    .trim();
+  const match = /^(\d+(?:-\d+)?)\s+(.+)$/i.exec(normalized);
+  if (!match) return undefined;
+  const street = (match[2] ?? '').toLowerCase()
+    .replace(/\b(\d+)(?:st|nd|rd|th)\b/g, '$1')
+    .replace(/\bsaint\b/g, 'st')
+    .replace(/\b(street|st)\b/g, 'st')
+    .replace(/\b(avenue|ave)\b/g, 'ave')
+    .replace(/\b(boulevard|blvd)\b/g, 'blvd')
+    .replace(/\b(road|rd)\b/g, 'rd')
+    .replace(/\b(lane|ln)\b/g, 'ln')
+    .replace(/\b(place|pl)\b/g, 'pl')
+    .replace(/\b(drive|dr)\b/g, 'dr')
+    .replace(/[.,]+/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  const streetTokens = street.split(/\s+/).filter(Boolean);
+  if (streetTokens.length < 2 || !streetTokens.some((token) => /^(st|ave|blvd|rd|ln|pl|dr|ct|way)$/.test(token))) return undefined;
+  return { houseNumber: (match[1] ?? '').toLowerCase(), street };
+}
+
+function explicitAddressesConflict(left?: string, right?: string): boolean {
+  const first = explicitStreetAddress(left);
+  const second = explicitStreetAddress(right);
+  if (!first || !second) return false;
+  return first.houseNumber !== second.houseNumber || first.street !== second.street;
+}
+
 function normalizedCrossStreet(value: string): string {
   return normalizeMapLocation(value)
     .toLowerCase()
@@ -226,6 +258,7 @@ function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number):
 export function isSameIncident(existing: IncidentIdentity, incoming: IncidentIdentity, maxAgeMs = 30 * 60 * 1000): boolean {
   const age = incoming.occurredAt - existing.occurredAt;
   if (existing.agency !== incoming.agency || age < 0 || age > maxAgeMs) return false;
+  if (explicitAddressesConflict(existing.location, incoming.location)) return false;
   const sameBorough = existing.borough === incoming.borough;
   const unitMatch = hasSharedUnit(existing.unitIds, incoming.unitIds);
   const sharedBox = Boolean(existing.boxNumbers?.some((box) => incoming.boxNumbers?.includes(box)));

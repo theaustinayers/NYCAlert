@@ -8,6 +8,7 @@ import type { CallAnalysisProvider } from '../providers/ai.js';
 import type { SubscriptionStore } from '../storage/subscription-store.js';
 import { DashboardStore } from './dashboard-store.js';
 import { CallProcessor, roleMentionOptions } from './call-processor.js';
+import { SourceCallLedger } from './source-call-ledger.js';
 import { LearningLog } from './learning-log.js';
 import type { IncidentPostPublisher, XIncidentPost } from '../providers/x-post.js';
 
@@ -111,7 +112,7 @@ describe('CallProcessor', () => {
     const processor = new CallProcessor(
       {} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard,
       false, 0.78, 4,
-      { async geocode() { return { latitude: 40.75, longitude: -73.98 }; } },
+      { async geocode() { return { latitude: 40.75, longitude: -73.98, precision: 'street_address' as const }; } },
       4, 4, log
     );
     await processor.process({
@@ -238,7 +239,7 @@ describe('CallProcessor', () => {
       false,
       0.78,
       4,
-      { async geocode() { return { latitude: 40.72, longitude: -73.82 }; } }
+      { async geocode() { return { latitude: 40.72, longitude: -73.82, precision: 'street_address' as const }; } }
     );
     const occurredAt = new Date();
 
@@ -415,7 +416,7 @@ describe('CallProcessor', () => {
       false,
       0.78,
       4,
-      { async geocode(_location, borough) { geocodedBorough = borough; return { latitude: 40.75, longitude: -73.98 }; } }
+      { async geocode(_location, borough) { geocodedBorough = borough; return { latitude: 40.75, longitude: -73.98, precision: 'street_address' as const }; } }
     );
 
     await processor.process({
@@ -458,6 +459,35 @@ describe('CallProcessor', () => {
 
     assert.equal(dashboard.search().length, 0);
     assert.equal(dashboard.listLiveCalls().length, 0);
+  });
+
+  it('never treats a borough-only geocoder result as an incident pin', async () => {
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript is supplied'); },
+      async triage() {
+        return {
+          shouldAlert: true, category: 'newsworthy', headline: 'Reported Fire', summary: 'Fire reported in Queens.',
+          location: 'Queens', incidentType: 'fire', confidence: 0.95, newsworthinessScore: 4
+        };
+      }
+    };
+    let geocoderCalls = 0;
+    const dashboard = new DashboardStore(false);
+    const processor = new CallProcessor(
+      {} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard,
+      false, 0.78, 4,
+      { async geocode() { geocoderCalls += 1; return { latitude: 40.7135078, longitude: -73.8283132, precision: 'borough' as const }; } }
+    );
+
+    await processor.process({
+      id: 'borough-only-location', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(),
+      transcript: 'Fire reported in Queens.'
+    });
+
+    assert.equal(geocoderCalls, 0);
+    assert.equal(dashboard.search().length, 0);
+    assert.equal(processor.listPendingIncidents()[0]?.location, 'Queens');
+    assert.equal(dashboard.listMapIncidents().length, 0);
   });
 
   it('routes Discord notifications independently to Public, Buff, and News Media scores', async () => {
@@ -524,7 +554,7 @@ describe('CallProcessor', () => {
     const dashboard = new DashboardStore(false);
     const processor = new CallProcessor(
       {} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard,
-      false, 0.78, 4, undefined, 4, 4, new LearningLog(join(testDirectory, 'x-publish-test'), false), publisher, 'https://nycalert.ai'
+      false, 0.78, 4, undefined, 4, 4, new LearningLog(join(testDirectory, 'x-publish-test'), false), publisher, 'https://nycalert.ai', 0
     );
     const occurredAt = new Date();
 
@@ -535,6 +565,114 @@ describe('CallProcessor', () => {
     assert.equal(posts[0]?.headline, 'Reported Building Fire');
     assert.equal(posts[0]?.location, '123 Main Street');
     assert.equal(dashboard.search()[0]?.updateCount, 1);
+  });
+
+  it('withholds medical incidents from automatic X posting', async () => {
+    let posts = 0;
+    const publisher: IncidentPostPublisher = {
+      async publishIncident() {
+        posts += 1;
+        return { postId: '123456789', text: 'created', url: 'https://x.com/i/web/status/123456789' };
+      }
+    };
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript is supplied'); },
+      async triage() {
+        return {
+          shouldAlert: true, category: 'newsworthy', headline: 'Medical Emergency Reported',
+          summary: 'Medical response reported.', location: '123 Main Street', incidentType: 'medical',
+          confidence: 0.95, newsworthinessScore: 4
+        };
+      }
+    };
+    const processor = new CallProcessor(
+      {} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, new DashboardStore(false),
+      false, 0.78, 4, undefined, 4, 4, new LearningLog(join(testDirectory, 'x-medical-private'), false), publisher,
+      'https://nycalert.ai', 0
+    );
+
+    await processor.process({
+      id: 'medical-x-withheld', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(),
+      transcript: 'Medical emergency reported at 123 Main Street.'
+    });
+
+    assert.equal(posts, 0);
+  });
+
+  it('suppresses a replayed source call ID before a second triage or incident publication', async () => {
+    const ledger = new SourceCallLedger(join(testDirectory, 'source-call-idempotency'));
+    await ledger.init();
+    let triageCalls = 0;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript is supplied'); },
+      async triage() {
+        triageCalls += 1;
+        return {
+          shouldAlert: true, category: 'newsworthy', headline: 'Reported Fire', summary: 'Fire reported.',
+          location: '123 Main Street', incidentType: 'fire', confidence: 0.95, newsworthinessScore: 4
+        };
+      }
+    };
+    const dashboard = new DashboardStore(false);
+    const processor = new CallProcessor(
+      {} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard,
+      false, 0.78, 4, undefined, 4, 4, new LearningLog(join(testDirectory, 'source-call-idempotency-log'), false),
+      undefined, 'https://nycalert.ai', 0, ledger
+    );
+    const call = {
+      id: 'same-broadcastify-call-id', agency: 'FDNY' as const, borough: 'Brooklyn' as const,
+      occurredAt: new Date(), transcript: 'Fire reported at 123 Main Street.'
+    };
+
+    try {
+      assert.equal(await processor.process(call), 'alert');
+      assert.equal(await processor.process(call), 'ignored');
+      assert.equal(triageCalls, 1);
+      assert.equal(dashboard.search().length, 1);
+    } finally {
+      ledger.close();
+    }
+  });
+
+  it('waits before posting to X and includes fields from a correlated follow-up', async () => {
+    const posts: XIncidentPost[] = [];
+    const publisher: IncidentPostPublisher = {
+      async publishIncident(incident) {
+        posts.push(incident);
+        return { postId: '987654321', text: 'created', url: 'https://x.com/i/web/status/987654321' };
+      }
+    };
+    let triageCount = 0;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript is supplied'); },
+      async triage() {
+        triageCount += 1;
+        return triageCount === 1
+          ? { shouldAlert: true, category: 'newsworthy', headline: 'Reported Building Fire', summary: 'Fire reported.', location: '123 Main Street', incidentType: 'fire', confidence: 0.95, newsworthinessScore: 4 }
+          : { shouldAlert: false, category: 'routine', summary: 'Ladder 3 reports to the fire; Box 1234.', location: '123 Main Street', incidentType: 'fire', confidence: 0.94, newsworthinessScore: 1 };
+      }
+    };
+    const dashboard = new DashboardStore(false);
+    const processor = new CallProcessor(
+      {} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard,
+      false, 0.78, 4, undefined, 4, 4, new LearningLog(join(testDirectory, 'x-delayed-follow-up'), false), publisher, 'https://nycalert.ai', 100
+    );
+    const occurredAt = new Date();
+
+    await processor.process({
+      id: 'x-delayed-first-call', agency: 'FDNY', borough: 'Manhattan', occurredAt,
+      transcript: 'Engine 12 reports a fire at 123 Main Street.'
+    });
+    assert.equal(posts.length, 0);
+    await processor.process({
+      id: 'x-delayed-follow-up', agency: 'FDNY', borough: 'Manhattan', occurredAt: new Date(occurredAt.getTime() + 15_000),
+      transcript: 'Ladder 3 reports to the fire at 123 Main Street. Box 1234.'
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    assert.equal(posts.length, 1);
+    assert.deepEqual(posts[0]?.unitIds, ['ENGINE 12', 'LADDER 3']);
+    assert.deepEqual(posts[0]?.boxNumbers, ['BOX 1234']);
   });
 
   it('records Discord send failures separately from empty subscription matches', async () => {
@@ -598,7 +736,7 @@ describe('CallProcessor', () => {
     const subscription = { guildId: 'guild', channelId: 'channel', borough: 'Queens' as const, agency: 'FDNY' as const, notifyRoleId: 'role-123' };
     const store = { listForCall: () => [subscription] } as unknown as SubscriptionStore;
     const processor = new CallProcessor(client, store, analysis, new DashboardStore(false), false, 0.78, 4,
-      { async geocode() { return { latitude: 40.72, longitude: -73.82 }; } });
+      { async geocode() { return { latitude: 40.72, longitude: -73.82, precision: 'street_address' as const }; } });
     const occurredAt = new Date();
 
     await processor.process({ id: 'first-message-call', agency: 'FDNY', borough: 'Queens', occurredAt, transcript: 'Engine 12 reports a vehicle crash at 123 Main Street.' });

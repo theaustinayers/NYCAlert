@@ -18,11 +18,13 @@ import { NominatimIncidentGeocoder } from './providers/map-geocoder.js';
 import { LearningLog } from './services/learning-log.js';
 import { DeploymentUpdater } from './services/deployment-updater.js';
 import { XApiIncidentPublisher } from './providers/x-post.js';
+import { SourceCallLedger } from './services/source-call-ledger.js';
 
 const store = new SubscriptionStore(config.dataDir);
 const accountStore = new AccountStore(config.dataDir);
 const siteSettingsStore = new SiteSettingsStore(config.dataDir);
 const learningLog = new LearningLog(config.dataDir, config.aiLearningLogEnabled, config.aiLearningLogRetentionDays, config.aiLearningLogMaxEvents);
+const sourceCallLedger = new SourceCallLedger(config.dataDir);
 const deploymentUpdater = new DeploymentUpdater(config.dataDir);
 const xPublisher = config.xUserAccessToken
   ? new XApiIncidentPublisher({ kind: 'oauth2-user', userAccessToken: config.xUserAccessToken })
@@ -55,6 +57,7 @@ let staticStreamMonitor: BroadcastifyStaticStreamMonitor | undefined;
 
 await store.init();
 await learningLog.init();
+await sourceCallLedger.init();
 await dashboard.start();
 
 if (!config.xAutoPostEnabled) {
@@ -105,7 +108,7 @@ client.once(Events.ClientReady, async (readyClient) => {
       new WhisperCppTranscriber(config.whisperModelPath, config.whisperExecutablePath, config.whisperThreads, undefined, config.ffmpegPath),
       new OpenAiTriageProvider(config.openAiApiKey, config.triageModel)
     );
-    const processor = new CallProcessor(client, store, analysis, dashboardStore, config.broadcastifyAudioRedistributionAllowed, 0.78, config.newsworthinessThreshold, incidentGeocoder, config.buffInterestThreshold, config.newsMediaDeskThreshold, learningLog, config.xAutoPostEnabled ? xPublisher : undefined, config.dashboardPublicUrl);
+    const processor = new CallProcessor(client, store, analysis, dashboardStore, config.broadcastifyAudioRedistributionAllowed, 0.78, config.newsworthinessThreshold, incidentGeocoder, config.buffInterestThreshold, config.newsMediaDeskThreshold, learningLog, config.xAutoPostEnabled ? xPublisher : undefined, config.dashboardPublicUrl, config.xPostDelayMs, sourceCallLedger);
     dashboard.setPendingIncidentAdminHandlers(
       () => processor.listPendingIncidents(),
       (pendingId) => processor.discardPendingIncident(pendingId),
@@ -177,6 +180,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
     logger.info({ signal }, 'Shutting down');
     void learningLog.flush();
+    sourceCallLedger.close();
     feedPoller?.stop();
     void staticStreamMonitor?.stop();
     void dashboard.stop();

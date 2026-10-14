@@ -174,6 +174,45 @@ describe('isSameIncident', () => {
     }), true);
   });
 
+  it('does not merge different explicit Manhattan addresses just because Box and unit match', () => {
+    const earlier = {
+      ...initial,
+      borough: 'Manhattan' as const,
+      incidentType: 'fire' as const,
+      location: '320 St. Nicholas Avenue',
+      unitIds: ['ENGINE 12'],
+      boxNumbers: ['BOX 1489'],
+      eventDescription: 'Electrical fire reported.',
+      occurredAt: 10_000_000
+    };
+    const later = {
+      ...earlier,
+      location: '359 West 126th Street',
+      eventDescription: 'Engine 12 requested to assist at another address.',
+      occurredAt: earlier.occurredAt + 60_000
+    };
+
+    assert.equal(isSameIncident(earlier, later), false);
+  });
+
+  it('still matches spelling variants of the same explicit address with shared Box evidence', () => {
+    const earlier = {
+      ...initial,
+      borough: 'Manhattan' as const,
+      incidentType: 'fire' as const,
+      location: '320 St. Nicholas Avenue',
+      boxNumbers: ['BOX 1489'],
+      occurredAt: 10_000_000
+    };
+    const later = {
+      ...earlier,
+      location: '320 Saint Nicholas Avenue, between 126th Street and 127th Street',
+      occurredAt: earlier.occurredAt + 60_000
+    };
+
+    assert.equal(isSameIncident(earlier, later), true);
+  });
+
   it('does not merge different units without a matching location or incompatible event types', () => {
     assert.equal(isSameIncident(initial, {
       ...initial, location: 'Different Street and Another Avenue', unitIds: ['ENGINE 4'],

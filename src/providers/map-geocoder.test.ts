@@ -26,7 +26,7 @@ describe('NominatimIncidentGeocoder', () => {
     const first = await geocoder.geocode('LIE at Queens Boulevard', 'Queens');
     const second = await geocoder.geocode('LIE at Queens Boulevard', 'Queens');
 
-    assert.deepEqual(first, { latitude: 40.72, longitude: -73.95 });
+    assert.deepEqual(first, { latitude: 40.72, longitude: -73.95, precision: 'place' });
     assert.deepEqual(second, first);
     assert.equal(requests, 1);
     assert.equal(requestedUrl?.searchParams.get('q'), 'Long Island Expressway at Queens Boulevard, Queens, New York City, NY');
@@ -37,6 +37,17 @@ describe('NominatimIncidentGeocoder', () => {
   it('does not return a point outside New York City bounds', async () => {
     const geocoder = new NominatimIncidentGeocoder(undefined, async () => new Response(JSON.stringify([{ lat: '41.2', lon: '-73.9' }])));
     assert.equal(await geocoder.geocode('123 Main Street', 'Queens'), undefined);
+  });
+
+  it('never geocodes a borough-only location to a false-precision point', async () => {
+    let requests = 0;
+    const geocoder = new NominatimIncidentGeocoder(undefined, async () => {
+      requests += 1;
+      return new Response(JSON.stringify([{ lat: '40.7135', lon: '-73.8283', address: { borough: 'Queens' } }]));
+    });
+
+    assert.equal(await geocoder.geocode('Queens', 'Queens'), undefined);
+    assert.equal(requests, 0);
   });
 
   it('geocodes an exact house address separately from bad cross-street text and confirms its borough', async () => {
@@ -53,7 +64,7 @@ describe('NominatimIncidentGeocoder', () => {
 
     const coordinates = await geocoder.geocode('54 West 103 Street between Fifth Avenue and Sixth Avenue', 'Manhattan');
 
-    assert.deepEqual(coordinates, { latitude: 40.7964623, longitude: -73.9624967 });
+    assert.deepEqual(coordinates, { latitude: 40.7964623, longitude: -73.9624967, precision: 'street_address' });
     assert.equal(queries[0], '54 West 103rd Street, Manhattan, New York City, NY');
   });
 
@@ -82,7 +93,7 @@ describe('NominatimIncidentGeocoder', () => {
   });
 
   it('keeps a verified direct address when it lies on the explicit cross-street segment', async () => {
-    const direct = { latitude: 40.866, longitude: -73.927 };
+    const direct = { latitude: 40.866, longitude: -73.927, precision: 'street_address' as const };
     const geocoder = new NominatimIncidentGeocoder(undefined, async (input) => {
       const query = new URL(String(input)).searchParams.get('q') ?? '';
       if (query.startsWith('3961 10th Avenue,')) return new Response(JSON.stringify([{
@@ -129,7 +140,7 @@ describe('NominatimIncidentGeocoder', () => {
       }]));
     });
 
-    assert.deepEqual(await geocoder.geocode('Brooklyn Avenue, Manhattan', 'Manhattan'), { latitude: 40.75, longitude: -73.98 });
+    assert.deepEqual(await geocoder.geocode('Brooklyn Avenue, Manhattan', 'Manhattan'), { latitude: 40.75, longitude: -73.98, precision: 'place' });
     assert.equal(queries[0], 'Brooklyn Avenue, Manhattan, New York City, NY');
   });
 
@@ -144,7 +155,7 @@ describe('NominatimIncidentGeocoder', () => {
 
     const coordinates = await geocoder.geocode('4th Street between 26th Avenue and 27th Avenue', 'Queens');
 
-    assert.deepEqual(coordinates, { latitude: 40.77535, longitude: -73.9331 });
+    assert.deepEqual(coordinates, { latitude: 40.77535, longitude: -73.9331, precision: 'road_segment' });
   });
 
   it('geocodes a garbled street-between-avenues description only when one NYC road matches both avenues', async () => {
@@ -166,7 +177,7 @@ describe('NominatimIncidentGeocoder', () => {
     const coordinates = await geocoder.geocode('7519 26-46 number four Street between Two Six and Two Seven Avenues', 'Queens');
     const secondAddressCoordinates = await geocoder.geocode('number four Street, between Two Six and Two Seven Avenues', 'Queens');
 
-    assert.deepEqual(coordinates, { latitude: 40.7754, longitude: -73.933 });
+    assert.deepEqual(coordinates, { latitude: 40.7754, longitude: -73.933, precision: 'road_segment' });
     assert.deepEqual(secondAddressCoordinates, coordinates);
     assert.deepEqual(queries, [
       '7519 26-46 4th Street, Queens, New York City, NY',

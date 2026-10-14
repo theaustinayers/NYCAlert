@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { curateIncidentHeadline, explicitFdnyAirportAlarm, explicitFdnyThirdAlarmOrHigher, normalizeIncidentHeadline, shouldNotify, type CallTriage } from './triage.js';
+import { curateIncidentHeadline, curateRoutineUpdateHeadline, curateRoutineUpdateSummary, explicitFdnyAirportAlarm, explicitFdnyThirdAlarmOrHigher, normalizeIncidentHeadline, shouldNotify, type CallTriage } from './triage.js';
 
 const result: CallTriage = { shouldAlert: true, category: 'breaking', summary: 'Dispatch reports a major incident.', confidence: 0.9, newsworthinessScore: 5 };
 
@@ -53,5 +53,25 @@ describe('curateIncidentHeadline', () => {
     assert.equal(curateIncidentHeadline('Phone Alarm Box', 'EDP setting fires in a train car.', 'FDNY'), 'Phone Alarm Box');
     assert.equal(curateIncidentHeadline('Reported Train Fire', 'Box 1733 train car fire.', 'FDNY'), 'Reported Train Fire');
     assert.equal(normalizeIncidentHeadline('Box Alarm For EDP Train Car Fire', 'newsworthy'), 'Box Alarm For EDP Train Car Fire');
+  });
+});
+
+describe('routine follow-up descriptions', () => {
+  it('replaces generic routine labels with a status explicitly present in the transcript', () => {
+    assert.equal(curateRoutineUpdateHeadline('Routine Update', 'Engine 12 returning to service.', 'routine'), 'Units Returning to Service');
+    assert.equal(curateRoutineUpdateSummary('Routine unit status update.', 'Engine 12 returning to service.', 'routine'), 'Radio traffic reports a unit returning to service.');
+  });
+
+  it('describes other literal status changes and does not invent one when unclear', () => {
+    assert.equal(curateRoutineUpdateHeadline('Unit Status Update', 'Conditions are under control.', 'routine'), 'Conditions Under Control');
+    assert.equal(curateRoutineUpdateSummary('Routine update.', 'No fire condition found.', 'routine'), 'Radio traffic reports no fire found.');
+    assert.equal(curateRoutineUpdateHeadline('Routine Update', 'Transmission unclear.', 'routine'), 'Specific Update Unclear');
+    assert.equal(curateRoutineUpdateSummary('Routine update.', 'Transmission unclear.', 'routine'), 'Radio update received; the specific change is unclear.');
+  });
+
+  it('leaves specific model output and non-routine classifications unchanged', () => {
+    assert.equal(curateRoutineUpdateHeadline('Engine On Scene', 'Engine 12 on scene.', 'routine'), 'Engine On Scene');
+    assert.equal(curateRoutineUpdateHeadline('Routine Update', 'Engine 12 returning to service.', 'newsworthy'), 'Routine Update');
+    assert.equal(curateRoutineUpdateSummary('Routine unit status update.', 'Engine 12 returning to service.', 'newsworthy'), 'Routine unit status update.');
   });
 });

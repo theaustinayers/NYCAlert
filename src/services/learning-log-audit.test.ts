@@ -58,4 +58,25 @@ describe('analyzeLearningLog', () => {
     assert.equal(JSON.stringify(report).includes('not-json'), false);
     assert.equal(JSON.stringify(report).includes(sensitiveLabel), false);
   });
+
+  it('reports location precision and duplicate source publications as aggregate counts only', async () => {
+    const rows = [
+      { eventId: 'a', stage: 'triage', location: 'Queens' },
+      { eventId: 'a', callId: 'private-call', agency: 'FDNY', stage: 'geocoding', geocode: { attempted: true, matched: true, precision: 'borough' } },
+      { eventId: 'a', callId: 'private-call', agency: 'FDNY', stage: 'incident-published', incidentId: 'incident-one', qualifications: { public: true } },
+      { eventId: 'b', callId: 'private-call', agency: 'FDNY', stage: 'incident-published', incidentId: 'incident-two', qualifications: { public: false } }
+    ].map((row) => JSON.stringify(row));
+
+    const report = await analyzeLearningLog(rows);
+    const serialized = JSON.stringify(report);
+
+    assert.equal(report.geocoding.records, 1);
+    assert.equal(report.geocoding.boroughOnlyAttempts, 1);
+    assert.deepEqual(report.geocoding.precisions, { borough: 1 });
+    assert.equal(report.events.boroughOnlyLocationsWithMatchedGeocode, 1);
+    assert.equal(report.publishing.sourceCallsWithMultipleIncidentIds, 1);
+    assert.equal(report.publishing.recordsWithoutPublicQualification, 1);
+    assert.equal(serialized.includes('private-call'), false);
+    assert.equal(serialized.includes('incident-one'), false);
+  });
 });

@@ -5,10 +5,15 @@ type EventSummary = {
   latestStage?: string;
   hasTriageLocation?: boolean;
   hasTriageRecord?: boolean;
+  locationKind?: 'borough-only' | 'specific' | 'none';
+  geocodeMatched?: boolean;
 };
 
+const knownPrecisions = new Set(['rooftop', 'street_address', 'intersection', 'road_segment', 'box_area', 'neighborhood', 'borough', 'place', 'unresolved', 'legacy-unlabeled']);
+const boroughOnlyLocations = new Set(['manhattan', 'bronx', 'queens', 'brooklyn', 'staten island', 'citywide']);
+
 const knownStages = new Set([
-  'received', 'transcription', 'transcription-error', 'transcription-ignored', 'repeat-suppressed',
+  'received', 'transcription', 'transcription-error', 'transcription-ignored', 'source-duplicate-suppressed', 'repeat-suppressed',
   'triage', 'triage-error', 'geocoding', 'correlation', 'pending-queue', 'incident-published',
   'incident-updated', 'incident-suppressed', 'incident-withheld', 'discord-routing', 'x-publishing', 'pending-expired',
   'pending-attached', 'pending-discarded', 'pending-approved', 'retry', 'error'
@@ -63,6 +68,9 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
   const confidenceKinds: Record<string, number> = {};
   const thresholdConfigurations: Record<string, number> = {};
   const routingOutcomes: Record<string, number> = {};
+  const geocodePrecisions: Record<string, number> = {};
+  const xPublishingOutcomes: Record<string, number> = {};
+  const publishedIdsBySourceCall = new Map<string, Set<string>>();
   const events = new Map<string, EventSummary>();
   let totalLines = 0;
   let validRecords = 0;
@@ -71,12 +79,23 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
   let triageRecords = 0;
   let triageRecordsWithLocation = 0;
   let triageRecordsWithoutLocation = 0;
+  let medicalTriageRecords = 0;
+  let medicalNewsQualified = 0;
+  let medicalPublicQualified = 0;
+  let medicalRecordsWithLocation = 0;
   let discordRoutingRecords = 0;
   let eligibleSubscriptions = 0;
   let successfulDestinations = 0;
   let channelFetchFailures = 0;
   let unsupportedDestinations = 0;
   let sendFailures = 0;
+  let geocodingRecords = 0;
+  let geocodeAttempts = 0;
+  let geocodeMatches = 0;
+  let boroughOnlyGeocodeAttempts = 0;
+  let publishedRecords = 0;
+  let publishedWithoutPublicQualification = 0;
+  let publishedRoutineRecords = 0;
 
   for await (const line of lines) {
     totalLines += 1;
@@ -98,6 +117,14 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
       if (stage === 'triage') {
         event.hasTriageRecord = true;
         event.hasTriageLocation = typeof parsed.location === 'string' && parsed.location.trim().length > 0;
+        const normalizedLocation = typeof parsed.location === 'string'
+          ? parsed.location.toLowerCase().replace(/[^a-z]+/g, ' ').trim()
+          : '';
+        event.locationKind = !normalizedLocation ? 'none'
+          : boroughOnlyLocations.has(normalizedLocation) ? 'borough-only' : 'specific';
+      }
+      if (stage === 'geocoding' && isRecord(parsed.geocode)) {
+        event.geocodeMatched = parsed.geocode.matched === true;
       }
       events.set(eventId!, event);
     }
@@ -109,6 +136,14 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
       else triageRecordsWithoutLocation += 1;
       incrementKnown(categories, parsed.category, knownCategories);
       incrementKnown(incidentTypes, parsed.incidentType, knownIncidentTypes);
+      if (parsed.incidentType === 'medical') {
+        medicalTriageRecords += 1;
+        if (hasLocation) medicalRecordsWithLocation += 1;
+        if (isRecord(parsed.qualifications)) {
+          if (parsed.qualifications.newsMedia === true) medicalNewsQualified += 1;
+          if (parsed.qualifications.public === true) medicalPublicQualified += 1;
+        }
+      }
       incrementKnown(
         confidenceKinds,
         typeof parsed.confidenceKind === 'string' ? parsed.confidenceKind : 'legacy-unlabeled',
@@ -129,6 +164,34 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
         sendFailures += safeCount(parsed.routing.sendFailures);
       }
     }
+
+    if (stage === 'geocoding') {
+      geocodingRecords += 1;
+      if (isRecord(parsed.geocode)) {
+        if (parsed.geocode.attempted === true) geocodeAttempts += 1;
+        if (parsed.geocode.matched === true) geocodeMatches += 1;
+        if (parsed.geocode.attempted === true && parsed.geocode.precision === 'borough') boroughOnlyGeocodeAttempts += 1;
+        incrementKnown(geocodePrecisions, parsed.geocode.precision ?? 'legacy-unlabeled', knownPrecisions);
+      }
+    }
+
+    if (stage === 'incident-published') {
+      publishedRecords += 1;
+      if (parsed.category === 'routine') publishedRoutineRecords += 1;
+      if (isRecord(parsed.qualifications) && parsed.qualifications.public !== true) publishedWithoutPublicQualification += 1;
+      if (typeof parsed.agency === 'string' && typeof parsed.callId === 'string' && typeof parsed.incidentId === 'string') {
+        const key = `${parsed.agency}\u0000${parsed.callId}`;
+        const ids = publishedIdsBySourceCall.get(key) ?? new Set<string>();
+        ids.add(parsed.incidentId);
+        publishedIdsBySourceCall.set(key, ids);
+      }
+    }
+
+    if (stage === 'x-publishing') {
+      incrementKnown(xPublishingOutcomes, parsed.disposition, new Set([
+        'x-post-created', 'x-post-failed', 'x-post-withheld-sensitive-medical', 'x-post-skipped-incident-unavailable'
+      ]));
+    }
   }
 
   const latestObservedStageCounts: Record<string, number> = {};
@@ -137,6 +200,11 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
   let eventsMissingTriage = 0;
   let eventsMissingTranscription = 0;
   let eventsWithLocationAtTriage = 0;
+  let boroughOnlyLocationsWithMatchedGeocode = 0;
+  let sourceCallsWithMultipleIncidentIds = 0;
+  for (const incidentIds of publishedIdsBySourceCall.values()) {
+    if (incidentIds.size > 1) sourceCallsWithMultipleIncidentIds += 1;
+  }
   for (const event of events.values()) {
     increment(latestObservedStageCounts, event.latestStage);
     if (event.stages.has('received')) {
@@ -147,6 +215,7 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
     if (event.hasTriageRecord) {
       eventsWithTriage += 1;
       if (event.hasTriageLocation) eventsWithLocationAtTriage += 1;
+      if (event.locationKind === 'borough-only' && event.geocodeMatched) boroughOnlyLocationsWithMatchedGeocode += 1;
     }
   }
 
@@ -160,6 +229,7 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
       missingTriageAfterReceived: eventsMissingTriage,
       missingTranscriptionAfterReceived: eventsMissingTranscription,
       withLocationAtTriage: eventsWithLocationAtTriage,
+      boroughOnlyLocationsWithMatchedGeocode,
       latestObservedStageCounts
     },
     triage: {
@@ -169,8 +239,28 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
       categories,
       incidentTypes,
       confidenceKinds,
-      thresholdConfigurations
+      thresholdConfigurations,
+      medical: {
+        records: medicalTriageRecords,
+        withLocation: medicalRecordsWithLocation,
+        newsMediaQualified: medicalNewsQualified,
+        publicQualified: medicalPublicQualified
+      }
     },
+    geocoding: {
+      records: geocodingRecords,
+      attempts: geocodeAttempts,
+      matches: geocodeMatches,
+      boroughOnlyAttempts: boroughOnlyGeocodeAttempts,
+      precisions: geocodePrecisions
+    },
+    publishing: {
+      incidentPublishedRecords: publishedRecords,
+      routinePublications: publishedRoutineRecords,
+      recordsWithoutPublicQualification: publishedWithoutPublicQualification,
+      sourceCallsWithMultipleIncidentIds
+    },
+    xPublishing: { records: Object.values(xPublishingOutcomes).reduce((sum, count) => sum + count, 0), outcomes: xPublishingOutcomes },
     discord: {
       routingRecords: discordRoutingRecords,
       outcomes: routingOutcomes,

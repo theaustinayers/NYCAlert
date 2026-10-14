@@ -3,6 +3,7 @@ import { AttachmentBuilder, EmbedBuilder } from 'discord.js';
 import { randomUUID } from 'node:crypto';
 import { subscriptionAudience, type AlertSubscription } from '../domain/subscriptions.js';
 import { analyzeFdnyTransmission } from '../domain/fdny-radio.js';
+import { canShowMapMarker, type LocationPrecision } from '../domain/location.js';
 import { curateIncidentHeadline, shouldNotify, type CallTriage, type RadioCall } from '../domain/triage.js';
 import type { IncidentPostPublisher } from '../providers/x-post.js';
 import type { CallAnalysisProvider } from '../providers/ai.js';
@@ -13,6 +14,7 @@ import { RecentRepeatDetector } from './repeat-detection.js';
 import type { SubscriptionStore } from '../storage/subscription-store.js';
 import type { DashboardStore, DashboardIncident } from './dashboard-store.js';
 import { LearningLog, type LearningEvent, type LearningWorkflowStage } from './learning-log.js';
+import type { SourceCallLedger } from './source-call-ledger.js';
 
 const nonSpeechPlaceholders = new Set([
   '', 'silence', 'blank audio', 'inaudible', 'no speech',
@@ -103,7 +105,9 @@ export class CallProcessor {
     private readonly minNewsMediaDesk = 4,
     private readonly learningLog = new LearningLog('./data', false),
     private readonly incidentPublisher?: IncidentPostPublisher,
-    private readonly publicUrl = 'https://nycalert.ai'
+    private readonly publicUrl = 'https://nycalert.ai',
+    private readonly xPostDelayMs = 60_000,
+    private readonly sourceCallLedger?: SourceCallLedger
   ) {}
 
   listPendingIncidents(): Array<{ id: string; agency: RadioCall['agency']; borough: RadioCall['borough']; eventType?: CallTriage['incidentType']; summary: string; location?: string; createdAt: string; expiresAt: string }> {
@@ -191,9 +195,20 @@ export class CallProcessor {
 
   async process(call: RadioCall, loadIncidentAudio?: () => Promise<{ path: string; contentType: string }>): Promise<'processed' | 'alert' | 'retry' | 'ignored'> {
     const trace: LearningTrace = { eventId: randomUUID(), path: [] };
+    if (this.sourceCallLedger && !this.sourceCallLedger.claim(call.agency, call.id)) {
+      logger.warn({ callId: call.id, agency: call.agency }, 'Suppressing duplicate source call ID');
+      this.recordLearning(call, trace, 'source-duplicate-suppressed', { disposition: 'source-call-id-already-claimed' });
+      return 'ignored';
+    }
     try {
-      return await this.processCall(call, loadIncidentAudio, trace);
+      const result = await this.processCall(call, loadIncidentAudio, trace);
+      if (this.sourceCallLedger) {
+        if (result === 'retry') this.sourceCallLedger.release(call.agency, call.id);
+        else this.sourceCallLedger.complete(call.agency, call.id);
+      }
+      return result;
     } catch (error) {
+      this.sourceCallLedger?.release(call.agency, call.id);
       this.recordLearning(call, trace, 'error', {
         disposition: 'processing-error',
         error: { name: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) }
@@ -291,18 +306,33 @@ export class CallProcessor {
       boxNumbers
     });
     let coordinates: MapCoordinates | undefined;
+    let geocodedPrecision: LocationPrecision | undefined;
     const explicitLocationBorough = boroughExplicitlyStated(triage.location);
     const searchBorough = explicitLocationBorough ?? call.borough;
-    if (triage.location && this.geocoder && (qualifiesAsIncident || unitIds.length > 0)) {
+    const boroughOnlyLocation = isBoroughOnlyLocation(triage.location);
+    if (triage.location && !boroughOnlyLocation && this.geocoder && (qualifiesAsIncident || unitIds.length > 0)) {
       try {
-        coordinates = await this.geocoder.geocode(triage.location, searchBorough);
+        const result = await this.geocoder.geocode(triage.location, searchBorough);
+        geocodedPrecision = result?.precision;
+        if (result && canShowMapMarker(result.precision)) coordinates = result;
       } catch (error) {
         logger.warn({ error, callId: call.id }, 'Incident location could not be geocoded');
         trace.geocode = { attempted: true, borough: searchBorough, matched: false, error: error instanceof Error ? error.message : String(error) };
       }
-      if (!trace.geocode) trace.geocode = { attempted: true, borough: searchBorough, matched: Boolean(coordinates), ...(coordinates ?? {}) };
+      if (!trace.geocode) trace.geocode = {
+        attempted: true,
+        borough: searchBorough,
+        matched: Boolean(geocodedPrecision),
+        precision: geocodedPrecision ?? 'unresolved',
+        ...(coordinates ? { latitude: coordinates.latitude, longitude: coordinates.longitude } : {})
+      };
     } else {
-      trace.geocode = { attempted: false, borough: searchBorough, matched: false };
+      trace.geocode = {
+        attempted: false,
+        borough: searchBorough,
+        matched: false,
+        precision: boroughOnlyLocation ? 'borough' : 'unresolved'
+      };
     }
     this.recordLearning(call, trace, 'geocoding', { location: triage.location, geocode: trace.geocode });
     const incidentBorough = explicitLocationBorough && coordinates ? explicitLocationBorough : call.borough;
@@ -376,6 +406,7 @@ export class CallProcessor {
         occurredAt: call.occurredAt,
         location: triage.location,
         incidentType: triage.incidentType,
+        locationPrecision: boroughOnlyLocation ? 'borough' : coordinates?.precision ?? trace.geocode?.precision ?? 'unresolved',
         ...(coordinates ? { latitude: coordinates.latitude, longitude: coordinates.longitude } : {}),
         unitIds,
         unitAssignments,
@@ -465,6 +496,7 @@ export class CallProcessor {
       category: triage.category,
       location: triage.location,
       incidentType: triage.incidentType,
+      locationPrecision: boroughOnlyLocation ? 'borough' : coordinates?.precision ?? trace.geocode?.precision ?? 'unresolved',
       ...(coordinates ? { latitude: coordinates.latitude, longitude: coordinates.longitude } : {}),
       unitIds,
       unitAssignments,
@@ -518,32 +550,13 @@ export class CallProcessor {
       correlation: { candidateCount: candidates.length, pendingMatchCount: pendingMatches.length, incidentId: incident.id }
     });
 
-    if (this.incidentPublisher && publicQualified) {
-      void this.incidentPublisher.publishIncident({
-          id: incident.id,
-          headline: triage.headline ?? incident.title.split(' | ')[0] ?? 'Incident',
-          ...(triage.incidentType ? { incidentType: triage.incidentType } : {}),
-          agency: call.agency,
-          borough: incident.borough,
-          ...(incident.location ? { location: incident.location } : {}),
-          unitIds: incident.unitIds,
-          boxNumbers: incident.boxNumbers,
-          newsworthinessScore: incident.newsworthinessScore
-        }).then((posted) => {
-          logger.info({ incidentId: incident.id, callId: call.id, postId: posted.postId }, 'Published incident to X');
-          this.recordLearning(call, trace, 'x-publishing', {
-            incidentId: incident.id,
-            disposition: 'x-post-created',
-            socialPost: { provider: 'x', postId: posted.postId, url: posted.url }
-          });
-        }).catch((error: unknown) => {
-          logger.error({ error, incidentId: incident.id, callId: call.id }, 'Could not publish incident to X');
-          this.recordLearning(call, trace, 'x-publishing', {
-            incidentId: incident.id,
-            disposition: 'x-post-failed',
-            error: { name: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) }
-          });
-        });
+    if (this.incidentPublisher && publicQualified && triage.incidentType !== 'medical') {
+      this.scheduleXIncidentPost(incident.id, call, trace);
+    } else if (this.incidentPublisher && publicQualified && triage.incidentType === 'medical') {
+      this.recordLearning(call, trace, 'x-publishing', {
+        incidentId: incident.id,
+        disposition: 'x-post-withheld-sensitive-medical'
+      });
     }
 
     const destinations = new Map<string, AlertSubscription[]>();
@@ -647,6 +660,51 @@ export class CallProcessor {
     });
   }
 
+  private scheduleXIncidentPost(incidentId: string, call: RadioCall, trace: LearningTrace): void {
+    const publishLatest = () => {
+      const latest = this.dashboard.getIncident(incidentId);
+      if (!latest || !this.incidentPublisher) {
+        this.recordLearning(call, trace, 'x-publishing', {
+          incidentId,
+          disposition: 'x-post-skipped-incident-unavailable'
+        });
+        return;
+      }
+      const headline = latest.title.split(' | ')[0] || 'Incident';
+      void this.incidentPublisher.publishIncident({
+        id: latest.id,
+        headline,
+        ...(latest.incidentType ? { incidentType: latest.incidentType } : {}),
+        agency: latest.agency,
+        borough: latest.borough,
+        ...(latest.location ? { location: latest.location } : {}),
+        unitIds: latest.unitIds,
+        boxNumbers: latest.boxNumbers,
+        newsworthinessScore: latest.newsworthinessScore
+      }).then((posted) => {
+        logger.info({ incidentId, callId: call.id, postId: posted.postId }, 'Published incident to X');
+        this.recordLearning(call, trace, 'x-publishing', {
+          incidentId,
+          disposition: 'x-post-created',
+          socialPost: { provider: 'x', postId: posted.postId, url: posted.url }
+        });
+      }).catch((error: unknown) => {
+        logger.error({ error, incidentId, callId: call.id }, 'Could not publish incident to X');
+        this.recordLearning(call, trace, 'x-publishing', {
+          incidentId,
+          disposition: 'x-post-failed',
+          error: { name: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) }
+        });
+      });
+    };
+
+    if (this.xPostDelayMs <= 0) {
+      publishLatest();
+      return;
+    }
+    setTimeout(publishLatest, this.xPostDelayMs).unref();
+  }
+
   private pruneTrackedIncidents(now: number): void {
     for (let index = this.trackedIncidents.length - 1; index >= 0; index -= 1) {
       if (now - this.trackedIncidents[index]!.identity.occurredAt > 30 * 60 * 1000) this.trackedIncidents.splice(index, 1);
@@ -723,6 +781,12 @@ function boroughExplicitlyStated(location?: string): IncidentIdentity['borough']
   if (value === 'queens') return 'Queens';
   if (value === 'brooklyn') return 'Brooklyn';
   return 'Staten Island';
+}
+
+function isBoroughOnlyLocation(location?: string): boolean {
+  if (!location) return false;
+  const normalized = location.toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+  return ['manhattan', 'bronx', 'queens', 'brooklyn', 'staten island', 'citywide', 'city wide', 'nyc', 'new york city'].includes(normalized);
 }
 
 function discordErrorCategory(error: unknown): string {

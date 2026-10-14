@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { rm, stat } from 'node:fs/promises';
 import type { Agency, Borough } from '../domain/subscriptions.js';
+import { canShowMapMarker, type LocationPrecision } from '../domain/location.js';
 import { isGenericIncidentHeadline, normalizeIncidentHeadline, type AlertCategory, type IncidentType, type RadioUnitAssignment } from '../domain/triage.js';
 import type { BroadcastifyFeedStatus } from '../providers/broadcastify.js';
 
@@ -16,6 +17,7 @@ export interface DashboardIncidentInput {
   incidentType?: IncidentType;
   latitude?: number;
   longitude?: number;
+  locationPrecision?: LocationPrecision;
   unitIds?: string[];
   unitAssignments?: RadioUnitAssignment[];
   boxNumbers?: string[];
@@ -40,11 +42,12 @@ export interface DashboardIncident {
   incidentType?: IncidentType;
   latitude?: number;
   longitude?: number;
+  locationPrecision: LocationPrecision;
   unitIds: string[];
   unitAssignments: RadioUnitAssignment[];
   boxNumbers: string[];
   updateCount: number;
-  updates: Array<{ summary: string; occurredAt: string; unitIds: string[]; unitAssignments: RadioUnitAssignment[]; boxNumbers: string[] }>;
+  updates: Array<{ headline?: string; summary: string; occurredAt: string; unitIds: string[]; unitAssignments: RadioUnitAssignment[]; boxNumbers: string[] }>;
   confidence: number;
   newsworthinessScore: number;
   buffInterestScore: number;
@@ -61,6 +64,7 @@ export interface DashboardIncidentUpdateInput {
   incidentType?: IncidentType;
   latitude?: number;
   longitude?: number;
+  locationPrecision?: LocationPrecision;
   unitIds: string[];
   unitAssignments?: RadioUnitAssignment[];
   boxNumbers?: string[];
@@ -228,7 +232,10 @@ export class DashboardStore {
       borough: input.borough,
       ...(input.location ? { location: input.location.slice(0, 180) } : {}),
       ...(input.incidentType ? { incidentType: input.incidentType } : {}),
-      ...(isValidCoordinates(input.latitude, input.longitude) ? { latitude: input.latitude, longitude: input.longitude } : {}),
+      ...(isValidCoordinates(input.latitude, input.longitude) && canShowMapMarker(input.locationPrecision)
+        ? { latitude: input.latitude, longitude: input.longitude }
+        : {}),
+      locationPrecision: input.locationPrecision ?? 'unresolved',
       unitIds: [...new Set(input.unitIds ?? [])].slice(0, 12),
       unitAssignments: normalizeUnitAssignments(input.unitAssignments ?? []),
       boxNumbers: normalizeBoxNumbers(input.boxNumbers ?? []),
@@ -274,9 +281,12 @@ export class DashboardStore {
     const incomingHeadline = normalizeIncidentHeadline(input.headline, input.category);
     const oldHeadlineIsMoreDescriptive = !isGenericIncidentHeadline(oldHeadline)
       && oldHeadline.split(/\s+/).length > incomingHeadline.split(/\s+/).length;
-    const headline = (!input.headline || isGenericIncidentHeadline(input.headline) || oldHeadlineIsMoreDescriptive)
+    const preserveExistingIncidentHeadline = input.category === 'routine' && !isGenericIncidentHeadline(oldHeadline);
+    const headline = (preserveExistingIncidentHeadline || !input.headline || isGenericIncidentHeadline(input.headline) || oldHeadlineIsMoreDescriptive)
       ? oldHeadline
       : incomingHeadline;
+    const hasMapMarker = isValidCoordinates(input.latitude, input.longitude) && canShowMapMarker(input.locationPrecision);
+    const locationChanged = input.location !== undefined && input.location !== current.location;
     const updated: DashboardIncident = {
       ...current,
       title: formatIncidentTitle(
@@ -289,12 +299,14 @@ export class DashboardStore {
       updatedAt: input.occurredAt.toISOString(),
       ...(input.location ? { location: input.location.slice(0, 180) } : {}),
       ...(input.incidentType && input.incidentType !== 'other' ? { incidentType: input.incidentType } : {}),
-      ...(isValidCoordinates(input.latitude, input.longitude) ? { latitude: input.latitude, longitude: input.longitude } : {}),
+      ...(hasMapMarker ? { latitude: input.latitude, longitude: input.longitude } : locationChanged ? { latitude: undefined, longitude: undefined } : {}),
+      locationPrecision: hasMapMarker ? input.locationPrecision! : locationChanged ? input.locationPrecision ?? 'unresolved' : current.locationPrecision,
       unitIds: [...new Set([...current.unitIds, ...input.unitIds])].slice(0, 12),
       unitAssignments: normalizeUnitAssignments([...current.unitAssignments, ...(input.unitAssignments ?? [])]),
       boxNumbers: normalizeBoxNumbers([...current.boxNumbers, ...(input.boxNumbers ?? [])]),
       updateCount: current.updateCount + 1,
       updates: [...current.updates, {
+        ...(input.headline && !isGenericIncidentHeadline(input.headline) ? { headline: normalizeIncidentHeadline(input.headline, input.category) } : {}),
         summary: input.summary.slice(0, 700),
         occurredAt: input.occurredAt.toISOString(),
         unitIds: [...new Set(input.unitIds)].slice(0, 12),
@@ -340,7 +352,7 @@ export class DashboardStore {
       summary,
       updatedAt: new Date().toISOString(),
       ...(location ? { location } : { location: undefined }),
-      ...(locationChanged ? { latitude: undefined, longitude: undefined } : {})
+      ...(locationChanged ? { latitude: undefined, longitude: undefined, locationPrecision: 'unresolved' } : {})
     };
     this.incidents[index] = updated;
     this.notifyIncidentChange();
@@ -363,7 +375,7 @@ export class DashboardStore {
       const lastActivityAt = Date.parse(incident.updatedAt || incident.occurredAt);
       return boroughMatches(incident.borough, boroughs)
         && Number.isFinite(lastActivityAt) && lastActivityAt <= now && now - lastActivityAt <= windowMs;
-    }).filter((incident) => isValidCoordinates(incident.latitude, incident.longitude));
+    }).filter((incident) => isValidCoordinates(incident.latitude, incident.longitude) && canShowMapMarker(incident.locationPrecision));
   }
 
   getAudio(incidentId: string): { path: string; contentType: string } | undefined {
