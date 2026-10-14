@@ -528,8 +528,7 @@ export class CallProcessor {
           ...(incident.location ? { location: incident.location } : {}),
           unitIds: incident.unitIds,
           boxNumbers: incident.boxNumbers,
-          newsworthinessScore: incident.newsworthinessScore,
-          incidentUrl: `${this.publicUrl}/incident/${encodeURIComponent(incident.id)}`
+          newsworthinessScore: incident.newsworthinessScore
         }).then((posted) => {
           logger.info({ incidentId: incident.id, callId: call.id, postId: posted.postId }, 'Published incident to X');
           this.recordLearning(call, trace, 'x-publishing', {

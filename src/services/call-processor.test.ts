@@ -534,7 +534,6 @@ describe('CallProcessor', () => {
     assert.equal(posts.length, 1);
     assert.equal(posts[0]?.headline, 'Reported Building Fire');
     assert.equal(posts[0]?.location, '123 Main Street');
-    assert.equal(posts[0]?.incidentUrl, `https://nycalert.ai/incident/${dashboard.search()[0]?.id}`);
     assert.equal(dashboard.search()[0]?.updateCount, 1);
   });
 

@@ -11,12 +11,11 @@ const incident: XIncidentPost = {
   location: '3961 10th Avenue between West 207th Street and West 215th Street',
   unitIds: ['ENGINE 84', 'LADDER 34'],
   boxNumbers: ['BOX 1810'],
-  newsworthinessScore: 5,
-  incidentUrl: 'https://nycalert.ai/incident/incident-123'
+  newsworthinessScore: 5
 };
 
 describe('formatXIncidentPost', () => {
-  it('formats all requested incident fields, tags, and the canonical incident link', () => {
+  it('formats incident details and hashtags without a URL to avoid the higher X URL-post rate', () => {
     const text = formatXIncidentPost(incident);
     assert.ok(text);
     assert.match(text, /FIRE · Reported Building Fire · FDNY/);
@@ -25,7 +24,7 @@ describe('formatXIncidentPost', () => {
     assert.match(text, /ENGINE 84, LADDER 34/);
     assert.match(text, /BOX 1810/);
     assert.match(text, /#FDNY #Manhattan #NYC #Breaking #NYCAlert/);
-    assert.match(text, /https:\/\/nycalert\.ai\/incident\/incident-123/);
+    assert.doesNotMatch(text, /https?:\/\//);
   });
 
   it('uses the agency/borough tags and omits the breaking tag below public 5/5', () => {

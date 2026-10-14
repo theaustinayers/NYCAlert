@@ -11,7 +11,6 @@ export interface XIncidentPost {
   unitIds: string[];
   boxNumbers: string[];
   newsworthinessScore: number;
-  incidentUrl: string;
 }
 
 export interface XPostResult {
@@ -49,7 +48,6 @@ export function formatXIncidentPost(incident: XIncidentPost): string | undefined
     ...(incident.unitIds.length ? [incident.unitIds.join(', ')] : []),
     ...(incident.boxNumbers.length ? [incident.boxNumbers.join(', ')] : []),
     hashtags.join(' '),
-    incident.incidentUrl
   ];
   const text = fields.join('\n');
   return xWeightedLength(text) <= 280 ? text : undefined;
