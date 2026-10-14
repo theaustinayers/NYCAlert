@@ -202,7 +202,7 @@ function renderLearningEvents() {
       ['Location', latest.location || event.location || 'Not stated'],
       ['Geocoding', latest.geocode ? `${latest.geocode.matched ? 'Matched' : latest.geocode.attempted ? 'No match' : 'Not attempted'}${latest.geocode.borough ? ` · ${latest.geocode.borough}` : ''}${latest.geocode.latitude ? ` · ${latest.geocode.latitude}, ${latest.geocode.longitude}` : ''}` : '—'],
       ['Correlation', latest.correlation ? `${latest.disposition || 'Decision'} · ${latest.correlation.candidateCount} candidates${latest.correlation.incidentId ? ` · ${latest.correlation.incidentId}` : ''}` : latest.disposition || '—'],
-      ['Discord', latest.routing ? `${latest.routing.discordMessagesSent || 0} sent · ${latest.routing.eligibleSubscriptions} eligible subscriptions` : '—']
+      ['Discord', latest.routing ? `${latest.routing.discordMessagesSent || 0}/${latest.routing.destinationCount ?? 0} destinations sent · ${latest.routing.eligibleSubscriptions} eligible subscriptions · ${latest.routing.sendFailures ?? 0} send failures · ${latest.routing.channelFetchFailures ?? 0} channel lookup failures` : '—']
     ];
     const transcript = event.transcript
       ? `<details><summary>Radio transcript (${Number(event.transcriptCharacters) || event.transcript.length} chars · ${escapeHtml(event.transcriptSource || 'source unknown')})</summary><pre class="learning-transcript">${escapeHtml(event.transcript)}</pre></details>`

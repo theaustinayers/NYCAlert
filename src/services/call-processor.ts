@@ -516,36 +516,63 @@ export class CallProcessor {
 
     const embed = buildIncidentEmbed(incident);
     let discordMessagesSent = 0;
+    let channelFetchFailures = 0;
+    let unsupportedDestinations = 0;
+    let sendFailures = 0;
+    const destinationResults: NonNullable<LearningEvent['routing']>['destinations'] = [];
     for (const [channelId, subscriptions] of destinations) {
-      const channel = await this.client.channels.fetch(channelId).catch((error: unknown) => {
+      let channel;
+      try {
+        channel = await this.client.channels.fetch(channelId);
+      } catch (error) {
+        channelFetchFailures += 1;
+        destinationResults.push({ result: 'channel-fetch-failed', errorCategory: discordErrorCategory(error) });
         logger.warn({ channelId, error }, 'Could not fetch notification channel');
-        return null;
-      });
-      if (!channel?.isTextBased() || !('send' in channel)) continue;
+        continue;
+      }
+      if (!channel?.isTextBased() || !('send' in channel)) {
+        unsupportedDestinations += 1;
+        destinationResults.push({ result: 'unsupported-channel' });
+        continue;
+      }
       const rolePings = roleMentionOptions(subscriptions);
-      const message = await channel.send({
-        embeds: [embed],
-        ...(rolePings.content ? { content: rolePings.content } : {}),
-        ...(this.allowAudioRedistribution && call.agency === 'FDNY' && incidentCall.audioPath ? { files: [new AttachmentBuilder(incidentCall.audioPath, { name: `${call.id}.${audioExtension(incidentCall.audioContentType)}` })] } : {}),
-        allowedMentions: rolePings.allowedMentions
-      }).catch((error: unknown) => {
-        logger.error({ error, channelId, callId: call.id }, 'Could not send alert to Discord channel');
-        return null;
-      });
-      if (message) {
+      try {
+        const message = await channel.send({
+          embeds: [embed],
+          ...(rolePings.content ? { content: rolePings.content } : {}),
+          ...(this.allowAudioRedistribution && call.agency === 'FDNY' && incidentCall.audioPath ? { files: [new AttachmentBuilder(incidentCall.audioPath, { name: `${call.id}.${audioExtension(incidentCall.audioContentType)}` })] } : {}),
+          allowedMentions: rolePings.allowedMentions
+        });
         tracked.messages.push({ channelId, messageId: message.id });
         discordMessagesSent += 1;
+        destinationResults.push({ result: 'sent' });
+      } catch (error) {
+        sendFailures += 1;
+        destinationResults.push({ result: 'send-failed', errorCategory: discordErrorCategory(error) });
+        logger.error({ error, channelId, callId: call.id }, 'Could not send alert to Discord channel');
       }
     }
+    const disposition = eligibleSubscriptions.length === 0 ? 'no-eligible-subscriptions'
+      : discordMessagesSent > 0 && destinationResults.some((destination) => destination.result !== 'sent') ? 'partially-sent'
+        : discordMessagesSent > 0 ? 'alerts-sent'
+          : sendFailures > 0 ? 'discord-send-failed'
+            : channelFetchFailures > 0 ? 'discord-channel-fetch-failed'
+              : 'no-sendable-discord-destination';
     this.recordLearning(call, trace, 'discord-routing', {
       incidentId: incident.id,
-      disposition: discordMessagesSent > 0 ? 'alerts-sent' : 'no-eligible-discord-destination-or-send-failed',
+      disposition,
       routing: {
         eligibleSubscriptions: eligibleSubscriptions.length,
         public: eligibleSubscriptions.filter((subscription) => subscriptionAudience(subscription) === 'public').length,
         buff: eligibleSubscriptions.filter((subscription) => subscriptionAudience(subscription) === 'buff').length,
         newsMedia: eligibleSubscriptions.filter((subscription) => subscriptionAudience(subscription) === 'news').length,
-        discordMessagesSent
+        destinationCount: destinations.size,
+        successfulDestinations: discordMessagesSent,
+        channelFetchFailures,
+        unsupportedDestinations,
+        sendFailures,
+        discordMessagesSent,
+        destinations: destinationResults
       }
     });
     return 'alert';
@@ -656,6 +683,17 @@ function boroughExplicitlyStated(location?: string): IncidentIdentity['borough']
   if (value === 'queens') return 'Queens';
   if (value === 'brooklyn') return 'Brooklyn';
   return 'Staten Island';
+}
+
+function discordErrorCategory(error: unknown): string {
+  const code = typeof error === 'object' && error !== null && 'code' in error ? (error as { code?: unknown }).code : undefined;
+  if (code === 50001) return 'missing-access';
+  if (code === 50013) return 'missing-permissions';
+  if (code === 10003) return 'unknown-channel';
+  if (typeof code === 'number') return 'discord-api-error';
+  const name = error instanceof Error ? error.name.toLowerCase() : '';
+  if (name.includes('timeout') || name.includes('network') || name.includes('fetch')) return 'network-error';
+  return 'unknown-error';
 }
 
 function buildIncidentEmbed(incident: DashboardIncident): EmbedBuilder {

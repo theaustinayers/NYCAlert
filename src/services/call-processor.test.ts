@@ -129,6 +129,10 @@ describe('CallProcessor', () => {
     assert.ok(related.some((event) => event.stage === 'correlation'));
     assert.ok(related.some((event) => event.stage === 'incident-published'));
     assert.ok(related.some((event) => event.stage === 'discord-routing'));
+    const delivery = related.find((event) => event.stage === 'discord-routing');
+    assert.equal(delivery?.disposition, 'no-eligible-subscriptions');
+    assert.equal(delivery?.routing?.eligibleSubscriptions, 0);
+    assert.equal(delivery?.routing?.sendFailures, 0);
     assert.ok(related.filter((event) => event.category).every((event) => event.trafficType === 'incident'));
     assert.equal(related.find((event) => event.stage === 'received')?.trafficType, 'unclassified');
     assert.equal(related.some((event) => 'audioPath' in event || 'audioBytes' in event), false);
@@ -457,6 +461,36 @@ describe('CallProcessor', () => {
     assert.equal(result, 'alert');
     assert.equal(dashboard.search().length, 1);
     assert.deepEqual(sentMentions, ['<@&news-role>', '<@&buff-role>']);
+  });
+
+  it('records Discord send failures separately from empty subscription matches', async () => {
+    const log = new LearningLog(join(testDirectory, 'learning-discord-send-failure'), true, 30, 100);
+    await log.init();
+    const channel = {
+      isTextBased: () => true,
+      async send() { throw new Error('Discord transport failed'); }
+    };
+    const client = { channels: { async fetch() { return channel; } } } as unknown as Client;
+    const subscription = { guildId: 'guild', channelId: 'channel', borough: 'Queens' as const, agency: 'FDNY' as const, audience: 'public' as const };
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript is supplied'); },
+      async triage() {
+        return { shouldAlert: true, category: 'newsworthy', headline: 'Reported Fire', summary: 'Fire reported.', location: '123 Main Street', incidentType: 'fire', confidence: 0.95, newsworthinessScore: 4 };
+      }
+    };
+    const processor = new CallProcessor(
+      client, { listForCall: () => [subscription] } as unknown as SubscriptionStore, analysis, new DashboardStore(false),
+      false, 0.78, 4, undefined, 4, 4, log
+    );
+
+    await processor.process({ id: 'discord-send-failure', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(), transcript: 'Fire reported at 123 Main Street.' });
+    await log.flush();
+
+    const delivery = (await log.readRecent(100)).find((event) => event.stage === 'discord-routing');
+    assert.equal(delivery?.disposition, 'discord-send-failed');
+    assert.equal(delivery?.routing?.eligibleSubscriptions, 1);
+    assert.equal(delivery?.routing?.sendFailures, 1);
+    assert.deepEqual(delivery?.routing?.destinations, [{ result: 'send-failed', errorCategory: 'unknown-error' }]);
   });
 
   it('edits the original Discord alert on a match without sending a second role ping', async () => {

@@ -47,7 +47,19 @@ export interface LearningEvent {
   scores?: { public: number; buff: number; newsMedia: number };
   thresholds?: { confidence: number; public: number; buff: number; newsMedia: number };
   qualifications?: { public: boolean; buff: boolean; newsMedia: boolean };
-  routing?: { eligibleSubscriptions: number; public: number; buff: number; newsMedia: number; discordMessagesSent?: number };
+  routing?: {
+    eligibleSubscriptions: number;
+    public: number;
+    buff: number;
+    newsMedia: number;
+    destinationCount: number;
+    successfulDestinations: number;
+    channelFetchFailures: number;
+    unsupportedDestinations: number;
+    sendFailures: number;
+    discordMessagesSent: number;
+    destinations: Array<{ result: 'sent' | 'channel-fetch-failed' | 'unsupported-channel' | 'send-failed'; errorCategory?: string }>;
+  };
   location?: string;
   geocode?: { attempted: boolean; borough?: string; matched: boolean; latitude?: number; longitude?: number; error?: string };
   units?: string[];
