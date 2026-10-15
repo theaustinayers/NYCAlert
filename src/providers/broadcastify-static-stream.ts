@@ -202,9 +202,14 @@ export class BroadcastifyStaticStreamMonitor {
       const completedNames = this.active ? names.slice(0, -1) : names;
       for (const name of completedNames) {
         const path = join(this.segmentDirectory, name);
+        let file;
         try {
-          const file = await stat(path);
-          if (!file.isFile() || Date.now() - file.mtimeMs < 2_500) continue;
+          file = await stat(path);
+        } catch {
+          continue;
+        }
+        if (!file.isFile() || Date.now() - file.mtimeMs < 2_500) continue;
+        try {
           this.stage = 'Transcribing NYPD audio segment';
           this.options.dashboard.setPipelineDiagnostics(this.diagnostics('processing'), 'nypd-static');
           const call: RadioCall = {
