@@ -49,6 +49,7 @@ const staticFiles = new Map<string, [string, string]>([
   ['/leaflet.css', ['../../node_modules/leaflet/dist/leaflet.css', 'text/css; charset=utf-8']],
   ['/leaflet.js', ['../../node_modules/leaflet/dist/leaflet.js', 'text/javascript; charset=utf-8']],
   ['/nyc-alert-wordmark.svg', ['nyc-alert-wordmark.svg', 'image/svg+xml']],
+  ['/og-image.png', ['og-image.png', 'image/png']],
   ['/logo.svg', ['../../nycalert.svg', 'image/svg+xml']]
 ]);
 
@@ -983,11 +984,11 @@ function renderSitemapXml(store: DashboardStore, publicUrl: string, settings: Si
 }
 
 function resolveOpenGraphImage(image: string | undefined, publicUrl: string): string {
-  const configured = image?.trim() || '/logo.svg';
+  const configured = image?.trim() || '/og-image.png';
   try {
     return new URL(configured, publicUrl).toString();
   } catch {
-    return new URL('/logo.svg', publicUrl).toString();
+    return new URL('/og-image.png', publicUrl).toString();
   }
 }
 

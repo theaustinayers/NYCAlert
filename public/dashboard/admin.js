@@ -523,7 +523,7 @@ function renderOpenGraphPreview() {
   const title = form.elements.namedItem('openGraphTitle')?.value?.trim() || 'NYC Alert — Public Safety Desk';
   const description = form.elements.namedItem('openGraphDescription')?.value?.trim()
     || 'AI-assisted New York City public safety incident notifications and dispatch updates.';
-  const imageValue = form.elements.namedItem('openGraphImage')?.value?.trim() || '';
+  const imageValue = form.elements.namedItem('openGraphImage')?.value?.trim() || '/og-image.png';
   const image = $('#og-preview-image');
   const previewTitle = $('#og-preview-title');
   const previewDescription = $('#og-preview-description');

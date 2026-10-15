@@ -381,7 +381,7 @@ describe('DashboardServer account routes', () => {
       assert.match(html, /property="og:title" content="Reported Airport Valve Alarm"/);
       assert.match(html, /property="og:description" content="Automatic valve alarm reported; no fire reported\. \| 407 John F\. Kennedy Airport \| FDNY · Queens"/);
       assert.match(html, new RegExp(`property="og:url" content="https://nycalert\\.ai/incident/${incident.id}"`));
-      assert.match(html, /property="og:image" content="https:\/\/nycalert\.ai\/logo\.svg"/);
+      assert.match(html, /property="og:image" content="https:\/\/nycalert\.ai\/og-image\.png"/);
       assert.match(html, /name="twitter:card" content="summary_large_image"/);
       assert.match(html, /rel="canonical" href="https:\/\/nycalert\.ai\/incident\//);
       assert.match(html, /href="https:\/\/discord\.gg\/EgkhPSZqtN"[^>]*>Join Our Discord<\/a>/);
