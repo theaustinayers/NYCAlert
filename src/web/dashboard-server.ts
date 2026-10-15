@@ -224,6 +224,7 @@ export class DashboardServer {
               ...(status?.audioLevels ? { audioLevels: status.audioLevels } : {}),
               ...(status?.audioMeterAt ? { audioMeterAt: status.audioMeterAt } : {}),
               ...(status?.callActivityLevels ? { callActivityLevels: status.callActivityLevels } : {}),
+              ...(status?.callActivityAt ? { callActivityAt: status.callActivityAt } : {}),
               ...(status?.meterSource ? { meterSource: status.meterSource } : {}),
               ...(status?.alertSeverity ? { alertSeverity: status.alertSeverity, alertUntil: status.alertUntil } : {}),
               lastError: status?.lastError
@@ -240,6 +241,7 @@ export class DashboardServer {
               ...(status.audioLevels ? { audioLevels: status.audioLevels } : {}),
               ...(status.audioMeterAt ? { audioMeterAt: status.audioMeterAt } : {}),
               ...(status.callActivityLevels ? { callActivityLevels: status.callActivityLevels } : {}),
+              ...(status.callActivityAt ? { callActivityAt: status.callActivityAt } : {}),
               ...(status.meterSource ? { meterSource: status.meterSource } : {}),
               ...(status.alertSeverity ? { alertSeverity: status.alertSeverity, alertUntil: status.alertUntil } : {}),
               lastError: status.lastError

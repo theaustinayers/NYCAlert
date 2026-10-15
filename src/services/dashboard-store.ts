@@ -180,10 +180,12 @@ export class DashboardStore {
         return activity.filter((timestamp) => timestamp >= start && timestamp < start + 7_500).length;
       });
       const maxBucket = Math.max(1, ...buckets);
+      const mostRecentCallAt = activity.at(-1);
       return {
         ...status,
         ...(activeAlert ? { alertSeverity: activeAlert.severity, alertUntil: new Date(activeAlert.until).toISOString() } : {}),
         callActivityLevels: buckets.map((value) => value / maxBucket),
+        ...(mostRecentCallAt ? { callActivityAt: new Date(mostRecentCallAt).toISOString() } : {}),
         meterSource: status.audioLevels ? 'pcm' as const : 'call-activity' as const
       };
     });

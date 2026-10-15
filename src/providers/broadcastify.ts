@@ -29,6 +29,7 @@ export interface BroadcastifyFeedStatus {
   audioMeterAt?: string;
   /** FDNY Calls API event counts; not an audio-amplitude waveform. */
   callActivityLevels?: number[];
+  callActivityAt?: string;
   meterSource?: 'pcm' | 'call-activity';
   alertSeverity?: 'newsworthy' | 'breaking';
   alertUntil?: string;

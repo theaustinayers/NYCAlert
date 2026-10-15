@@ -267,7 +267,7 @@ export class CallProcessor {
       ...analyzedTriage,
       headline: curateIncidentHeadline(analyzedTriage.headline, transcript, call.agency)
     };
-    if (call.agency === 'FDNY') this.dashboard.recordFeedCallActivity(call.agency, call.borough, call.occurredAt.getTime());
+    this.dashboard.recordFeedCallActivity(call.agency, call.borough);
     if (triage.category === 'newsworthy' || triage.category === 'breaking') {
       this.dashboard.setFeedCallAlert(call.agency, call.borough, triage.category);
     }
@@ -387,13 +387,6 @@ export class CallProcessor {
     });
     if (candidates.length > 1) logger.warn({ callId: call.id, candidates: candidates.length }, 'Ambiguous incident follow-up left separate');
 
-    if (unresolvedBoroughConflict) {
-      if (qualifiesAsIncident && triage.category !== 'routine') this.enqueuePendingIncident({ identity, triage, unitAssignments, call, trace });
-      logger.info({ callId: call.id, pendingCount: this.pendingIncidents.length }, 'Cross-borough location could not be verified; withholding public call');
-      this.recordLearning(call, trace, 'incident-withheld', { disposition: 'explicit-borough-conflict-unverified', location: triage.location });
-      return 'processed';
-    }
-
     if (matchingIncident) {
       await recordLiveCall();
       let updateCall = call;
@@ -442,6 +435,33 @@ export class CallProcessor {
       } else {
         this.recordLearning(call, trace, 'incident-suppressed', { incidentId: matchingIncident.id, disposition: 'matched-incident-update-failed' });
       }
+      return 'processed';
+    }
+
+    if (unresolvedBoroughConflict) {
+      if (qualifiesAsIncident && triage.category !== 'routine') {
+        const pendingMatches = this.pendingIncidents.filter((pending) => isSameIncident(pending.identity, identity));
+        if (pendingMatches.length === 1) {
+          const pending = pendingMatches[0]!;
+          pending.identity = {
+            ...pending.identity,
+            eventDescription: `${pending.identity.eventDescription ?? ''} ${identity.eventDescription ?? ''}`.trim(),
+            unitIds: [...new Set([...pending.identity.unitIds, ...unitIds])],
+            boxNumbers: [...new Set([...(pending.identity.boxNumbers ?? []), ...boxNumbers])]
+          };
+          pending.summary = `${pending.summary} ${triage.summary}`.slice(0, 1_200);
+          pending.expiresAt = Math.max(pending.expiresAt, Date.now() + 30 * 60 * 1000);
+        } else if (pendingMatches.length === 0) {
+          this.enqueuePendingIncident({ identity, triage, unitAssignments, call, trace });
+        } else {
+          logger.warn({ callId: call.id, candidates: pendingMatches.length }, 'Ambiguous cross-borough reports left pending and unmerged');
+        }
+      }
+      logger.info({ callId: call.id, pendingCount: this.pendingIncidents.length }, 'Cross-borough location could not be verified; withholding new public call');
+      this.recordLearning(call, trace, 'incident-withheld', {
+        disposition: matchingIncident ? 'existing-incident-updated-location-conflict-unverified' : 'explicit-borough-conflict-unverified',
+        location: triage.location
+      });
       return 'processed';
     }
 

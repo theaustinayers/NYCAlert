@@ -164,6 +164,22 @@ describe('DashboardStore', () => {
     assert.equal(Date.parse(status.alertUntil!) - now, 30_001);
   });
 
+  it('exposes processed NYPD call time separately from its PCM audio-level telemetry', () => {
+    const store = new DashboardStore(false);
+    const now = Date.now();
+    store.setFeedStatusProvider(() => [{
+      id: 'nypd-citywide', name: 'NYPD Citywide', agency: 'NYPD', borough: 'Citywide', state: 'online',
+      callsSeen: 2, audioLevels: Array.from({ length: 48 }, () => 0), meterSource: 'pcm'
+    }]);
+    store.recordFeedCallActivity('NYPD', 'Citywide', now);
+
+    const status = store.getFeedStatuses()[0]!;
+    assert.equal(status.meterSource, 'pcm');
+    assert.equal(status.audioLevels?.every((level) => level === 0), true);
+    assert.equal(status.callActivityAt, new Date(now).toISOString());
+    assert.equal(status.callActivityLevels?.some((level) => level > 0), true);
+  });
+
   it('upgrades a generic incident title when a follow-up identifies smoke from the roof', async () => {
     const store = new DashboardStore(false);
     const incident = await store.publish({

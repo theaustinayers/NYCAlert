@@ -314,6 +314,42 @@ describe('CallProcessor', () => {
     assert.equal(incidents[0]?.updateCount, 2);
   });
 
+  it('keeps the audit-derived West Farms fire as one incident across feed-borough mismatches and attaches control status', async () => {
+    const triages = [
+      { shouldAlert: true, category: 'breaking', headline: 'Heavy Fire Reported', summary: 'Heavy fire reported at a commercial building; second alarm transmitted.', location: '1717 West Farms Rd', incidentType: 'fire', confidence: 0.92, newsworthinessScore: 5 },
+      { shouldAlert: true, category: 'newsworthy', headline: 'Second Alarm Transmitted', summary: 'Second alarm transmitted at 1717 West Farms Road; defensive operation reported.', location: '1717 West Farms Road', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 4 },
+      { shouldAlert: false, category: 'routine', headline: 'Fire Under Control', summary: 'Fire reported under control at 1717 West Farms Road.', location: '1717 West Farms Road, Bronx', incidentType: 'other', confidence: 0.85, newsworthinessScore: 1 }
+    ] as const;
+    let index = 0;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Broadcastify transcript is supplied'); },
+      async triage() { return triages[index++]!; }
+    };
+    const dashboard = new DashboardStore(false);
+    const processor = new CallProcessor({} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard);
+    const startedAt = new Date();
+
+    assert.equal(await processor.process({
+      id: 'west-farms-bronx-original', agency: 'FDNY', borough: 'Bronx', occurredAt: startedAt,
+      transcript: 'Heavy fire reported, Box 2908, 1717 West Farms Road, second alarm.'
+    }), 'alert');
+    assert.equal(await processor.process({
+      id: 'west-farms-queens-simulcast', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(startedAt.getTime() + 13 * 60_000),
+      transcript: 'Second alarm transmitted, Box 2910, 1717 West Farms Road, defensive operation.'
+    }), 'processed');
+    assert.equal(await processor.process({
+      id: 'west-farms-manhattan-control', agency: 'FDNY', borough: 'Manhattan', occurredAt: new Date(startedAt.getTime() + 16 * 60_000),
+      transcript: 'Fire under control, 1717 West Farms Road, Bronx.'
+    }), 'processed');
+
+    const incidents = dashboard.search();
+    assert.equal(incidents.length, 1);
+    assert.equal(incidents[0]?.borough, 'Bronx');
+    assert.equal(incidents[0]?.updateCount, 2);
+    assert.equal(incidents[0]?.updates[1]?.headline, 'Fire Under Control');
+    assert.equal(processor.listPendingIncidents().length, 0);
+  });
+
   it('groups corroborating EDP train-car fire reports when one transcript only names the borough', async () => {
     let triageIndex = 0;
     const analysis: CallAnalysisProvider = {

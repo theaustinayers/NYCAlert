@@ -159,6 +159,24 @@ function explicitAddressesConflict(left?: string, right?: string): boolean {
   return first.houseNumber !== second.houseNumber || first.street !== second.street;
 }
 
+function statedBorough(location?: string): Borough | undefined {
+  if (!location) return undefined;
+  const match = /(?:,\s*|\bin\s+|\bnear\s+)(Manhattan|Bronx|Queens|Brooklyn|Staten\s+Island)\s*$/i.exec(location);
+  const value = match?.[1]?.replace(/\s+/g, ' ').toLowerCase();
+  if (value === 'manhattan') return 'Manhattan';
+  if (value === 'bronx') return 'Bronx';
+  if (value === 'queens') return 'Queens';
+  if (value === 'brooklyn') return 'Brooklyn';
+  if (value === 'staten island') return 'Staten Island';
+  return undefined;
+}
+
+function explicitBoroughsConflict(left?: string, right?: string): boolean {
+  const first = statedBorough(left);
+  const second = statedBorough(right);
+  return Boolean(first && second && first !== second);
+}
+
 function sameExplicitStreetAddress(left?: string, right?: string): boolean {
   const first = explicitStreetAddress(left);
   const second = explicitStreetAddress(right);
@@ -181,7 +199,8 @@ function sharesSpecificCrossAgencyEvent(left?: string, right?: string): boolean 
 function sameCrossAgencyIncident(existing: IncidentIdentity, incoming: IncidentIdentity, age: number): boolean {
   if (existing.borough !== incoming.borough || age > 5 * 60 * 1000
     || !compatibleType(existing.incidentType, incoming.incidentType)
-    || explicitAddressesConflict(existing.location, incoming.location)) return false;
+    || explicitAddressesConflict(existing.location, incoming.location)
+    || explicitBoroughsConflict(existing.location, incoming.location)) return false;
   if (coordinatesConflict(existing, incoming, 150)) return false;
   const exactAddress = sameExplicitStreetAddress(existing.location, incoming.location);
   const exactCoordinates = sameCoordinates(existing, incoming);
@@ -275,6 +294,10 @@ function compatibleType(left?: IncidentType, right?: IncidentType): boolean {
   return Boolean(left && right && left !== 'other' && right !== 'other' && left === right);
 }
 
+function nonConflictingType(left?: IncidentType, right?: IncidentType): boolean {
+  return !(left && right && left !== 'other' && right !== 'other' && left !== right);
+}
+
 function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const radians = Math.PI / 180;
   const dLat = (lat2 - lat1) * radians;
@@ -289,14 +312,19 @@ export function isSameIncident(existing: IncidentIdentity, incoming: IncidentIde
   const age = incoming.occurredAt - existing.occurredAt;
   if (age < 0 || age > maxAgeMs) return false;
   if (existing.agency !== incoming.agency) return sameCrossAgencyIncident(existing, incoming, age);
-  if (explicitAddressesConflict(existing.location, incoming.location)) return false;
+  if (explicitAddressesConflict(existing.location, incoming.location)
+    || explicitBoroughsConflict(existing.location, incoming.location)) return false;
   const sameBorough = existing.borough === incoming.borough;
   const unitMatch = hasSharedUnit(existing.unitIds, incoming.unitIds);
   const sharedBox = Boolean(existing.boxNumbers?.some((box) => incoming.boxNumbers?.includes(box)));
   const locationMatch = sameLocation(existing, incoming);
   const coordsConflict = coordinatesConflict(existing, incoming, 500);
-  const crossBoroughLocationMatch = !coordsConflict && (sameCoordinates(existing, incoming) || sameExplicitAddress(existing, incoming));
+  const exactStreetAddress = sameExplicitStreetAddress(existing.location, incoming.location);
+  const crossBoroughLocationMatch = !coordsConflict && (sameCoordinates(existing, incoming) || sameExplicitAddress(existing, incoming) || exactStreetAddress);
   if (!coordsConflict && sharedBox && age <= 10 * 60 * 1000 && compatibleType(existing.incidentType, incoming.incidentType)) return true;
+  // Exact explicit address is stronger than a feed-borough label. Permit an unspecified/other
+  // follow-up type (e.g. “fire under control”), but never merge conflicting concrete types.
+  if (!coordsConflict && exactStreetAddress && nonConflictingType(existing.incidentType, incoming.incidentType)) return true;
   if ((sameBorough ? locationMatch : crossBoroughLocationMatch)
     && compatibleType(existing.incidentType, incoming.incidentType)) return true;
   const spatiallyNearby = sameCoordinatesWithin(existing, incoming, 350);

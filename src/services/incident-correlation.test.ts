@@ -73,6 +73,70 @@ describe('isSameIncident', () => {
     assert.equal(isSameIncident(manhattan, queensFeed), true);
   });
 
+  it('matches the audit-derived Bronx cross-feed pattern with a one-number street address and corrected suffix', () => {
+    const original = {
+      ...initial,
+      borough: 'Bronx' as const,
+      incidentType: 'fire' as const,
+      location: '1717 West Farms Rd',
+      eventDescription: 'Heavy fire reported at commercial building, second alarm',
+      boxNumbers: ['BOX 2908'],
+      unitIds: [],
+      occurredAt: 50_000_000
+    };
+    const crossFeed = {
+      ...original,
+      borough: 'Queens' as const,
+      location: '1717 West Farms Road',
+      eventDescription: 'Second alarm transmitted at 1717 West Farms Road; defensive operation',
+      boxNumbers: ['BOX 2910'],
+      occurredAt: original.occurredAt + 13 * 60_000
+    };
+    assert.equal(isSameIncident(original, crossFeed), true);
+  });
+
+  it('matches an under-control status with an unspecified type at the same exact address', () => {
+    const activeFire = {
+      ...initial,
+      borough: 'Bronx' as const,
+      incidentType: 'fire' as const,
+      location: '1717 West Farms Road',
+      eventDescription: 'Heavy fire, second alarm commercial building',
+      unitIds: [],
+      occurredAt: 50_000_000
+    };
+    assert.equal(isSameIncident(activeFire, {
+      ...activeFire,
+      borough: 'Manhattan',
+      incidentType: 'other',
+      eventDescription: 'Fire under control',
+      occurredAt: activeFire.occurredAt + 16 * 60_000
+    }), true);
+  });
+
+  it('still rejects different addresses or conflicting precise coordinates across borough feed labels', () => {
+    const original = {
+      ...initial,
+      borough: 'Bronx' as const,
+      incidentType: 'fire' as const,
+      location: '1717 West Farms Road',
+      unitIds: [],
+      occurredAt: 60_000_000
+    };
+    assert.equal(isSameIncident(original, {
+      ...original, borough: 'Queens', location: '1718 West Farms Road', occurredAt: original.occurredAt + 30_000
+    }), false);
+    assert.equal(isSameIncident({ ...original, latitude: 40.84, longitude: -73.88 }, {
+      ...original, borough: 'Queens', latitude: 40.75, longitude: -73.99, occurredAt: original.occurredAt + 30_000
+    }), false);
+    assert.equal(isSameIncident(original, {
+      ...original, borough: 'Queens', incidentType: 'vehicle', occurredAt: original.occurredAt + 30_000
+    }), false);
+    assert.equal(isSameIncident({ ...original, location: '999 Example Road, Bronx' }, {
+      ...original, borough: 'Queens', location: '999 Example Road, Queens', occurredAt: original.occurredAt + 30_000
+    }), false);
+  });
+
   it('does not merge cross-borough calls using only a street name or shared unit', () => {
     const manhattanFire = { ...initial, incidentType: 'fire' as const, location: 'West 178th Street', unitIds: ['ENGINE 12'] };
     const otherBoroughFire = { ...manhattanFire, borough: 'Bronx' as const, occurredAt: initial.occurredAt + 10_000 };

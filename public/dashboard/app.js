@@ -138,14 +138,17 @@ function renderFeeds() {
     const stateLabel = feed.state === 'online' ? 'ONLINE'
       : feed.state === 'offline' ? 'OFFLINE' : 'NOT MONITORED';
     const activityText = activityAt ? `${isFdny ? 'Call' : 'Audio'} ${escapeHtml(timeAgo(activityAt))}` : isFdny ? 'No calls yet' : 'No audio yet';
-    const latestActivityAge = activityAt ? Date.now() - Date.parse(activityAt) : Number.POSITIVE_INFINITY;
-    const syntheticWaveActive = feed.meterSource === 'call-activity' && latestActivityAge >= 0 && latestActivityAge < 20_000;
-    const meterLevels = feed.meterSource === 'pcm'
+    const recentCallAt = feed.callActivityAt || (isFdny ? feed.lastActivityAt : undefined);
+    const recentCallAge = recentCallAt ? Date.now() - Date.parse(recentCallAt) : Number.POSITIVE_INFINITY;
+    const callActivityActive = recentCallAge >= 0 && recentCallAge < 20_000;
+    const pcmHasSignal = feed.meterSource === 'pcm' && Array.isArray(feed.audioLevels) && feed.audioLevels.some((level) => Number(level) > 0);
+    const syntheticWaveActive = callActivityActive && (feed.meterSource !== 'pcm' || !pcmHasSignal);
+    const meterLevels = pcmHasSignal
       ? feed.audioLevels
-      : syntheticWaveActive ? buildSyntheticCallWave(feed.id, Date.now()) : feed.callActivityLevels;
-    const meterLabel = feed.meterSource === 'pcm'
+      : syntheticWaveActive ? buildSyntheticCallWave(feed.id, Date.now()) : Array.from({ length: 40 }, () => 0);
+    const meterLabel = pcmHasSignal
       ? 'LIVE AUDIO LEVEL · PCM'
-      : syntheticWaveActive ? 'FDNY call-activity animation; not an audio-level measurement' : 'FDNY call activity; not an audio-level measurement';
+      : syntheticWaveActive ? 'Recent radio call activity indicator; not an audio-level measurement' : `${feed.agency} audio meter is idle`;
     const alertActive = feed.alertUntil && Date.parse(feed.alertUntil) > Date.now();
     const alertSeverity = alertActive ? feed.alertSeverity : undefined;
     const alertClass = alertSeverity === 'breaking' ? ' feed-alert-breaking' : alertSeverity === 'newsworthy' ? ' feed-alert-newsworthy' : '';
@@ -156,7 +159,7 @@ function renderFeeds() {
       <div class="feed-top"><span class="agency-tag ${feed.agency === 'NYPD' ? 'nypd' : ''}">${escapeHtml(feed.agency)}</span><span class="feed-state ${escapeHtml(feed.state)}"><i class="health-dot ${escapeHtml(feed.state)}"></i>${stateLabel}</span></div>
       <div class="feed-name">${escapeHtml(feed.name)}</div>
       <div class="feed-location">${escapeHtml(feed.borough)}</div>
-      <div class="feed-meter-wrap"><div class="feed-meter${syntheticWaveActive ? ' feed-meter-active' : ''}" role="img" aria-label="${meterLabel}">${meter}</div>${feed.meterSource === 'pcm' ? `<span class="feed-meter-label">${meterLabel}</span>` : ''}</div>
+      <div class="feed-meter-wrap"><div class="feed-meter${syntheticWaveActive ? ' feed-meter-active' : ''}" role="img" aria-label="${meterLabel}">${meter}</div>${pcmHasSignal ? `<span class="feed-meter-label">${meterLabel}</span>` : ''}</div>
       <div class="feed-metrics"><div class="feed-metric"><span>CALLS SEEN</span><strong>${Number(feed.callsSeen) || 0}</strong></div><div class="feed-metric"><span>${isFdny ? 'LAST CALL' : 'LAST AUDIO'}</span><strong class="${activityAt && isRecent(activityAt) ? 'recent' : ''}">${activityText}</strong></div></div>
       ${feed.lastError ? `<span class="feed-error">${escapeHtml(feed.lastError)}</span>` : ''}
     </article>`;
