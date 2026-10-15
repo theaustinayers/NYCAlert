@@ -30,6 +30,19 @@ export function createStreamDataTap(onData: () => void): Transform {
   });
 }
 
+/** Remove only segments left by a previous process, which may have been interrupted mid-WAV write. */
+export async function removeOrphanedNypdSegments(segmentDirectory: string): Promise<number> {
+  let names: string[];
+  try {
+    names = (await readdir(segmentDirectory)).filter((name) => /^nypd-\d{13}-\d+-\d{6}\.wav$/.test(name));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
+  }
+  await Promise.all(names.map((name) => rm(join(segmentDirectory, name), { force: true })));
+  return names.length;
+}
+
 export interface BroadcastifyStaticStreamOptions {
   feedId: string;
   username: string;
@@ -82,8 +95,6 @@ export class BroadcastifyStaticStreamMonitor {
     this.startedAt = Date.now();
     this.stage = 'Connecting to authenticated NYPD stream';
     this.options.dashboard.setPipelineDiagnostics(this.diagnostics('starting'), 'nypd-static');
-    this.segmentTimer = setInterval(() => void this.processSegments(), 1_500);
-    this.segmentTimer.unref();
     this.loop = this.run();
   }
 
@@ -124,6 +135,17 @@ export class BroadcastifyStaticStreamMonitor {
       this.options.dashboard.setPipelineDiagnostics(this.diagnostics('error'), 'nypd-static');
       return;
     }
+    try {
+      await removeOrphanedNypdSegments(this.segmentDirectory);
+    } catch (error) {
+      this.lastError = sanitizeError(error);
+      this.stage = 'Cannot clear interrupted NYPD audio segments';
+      this.options.dashboard.setPipelineDiagnostics(this.diagnostics('error'), 'nypd-static');
+      return;
+    }
+    if (!this.active) return;
+    this.segmentTimer = setInterval(() => void this.processSegments(), 1_500);
+    this.segmentTimer.unref();
     while (this.active) {
       this.lastAttemptAt = Date.now();
       this.stage = 'Connecting to authenticated NYPD stream';

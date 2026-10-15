@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { describe, it } from 'node:test';
 import { DashboardStore } from '../services/dashboard-store.js';
-import { BroadcastifyStaticStreamMonitor, buildPcmSegmentArgs, createStreamDataTap } from './broadcastify-static-stream.js';
+import { BroadcastifyStaticStreamMonitor, buildPcmSegmentArgs, createStreamDataTap, removeOrphanedNypdSegments } from './broadcastify-static-stream.js';
 
 describe('buildPcmSegmentArgs', () => {
   it('writes self-contained 16 kHz mono PCM WAV segments for reliable Whisper input', () => {
@@ -38,6 +38,22 @@ describe('createStreamDataTap', () => {
 
     assert.equal(chunksObserved, 2);
     assert.equal(Buffer.concat(received).toString(), 'audio-1audio-2');
+  });
+});
+
+describe('removeOrphanedNypdSegments', () => {
+  it('removes prior-process WAV segments without touching unrelated files', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'nyc-nypd-orphans-'));
+    try {
+      const orphan = 'nypd-1792035505965-0-000005.wav';
+      await writeFile(join(directory, orphan), Buffer.from('incomplete wav'));
+      await writeFile(join(directory, 'keep-this.txt'), Buffer.from('unrelated'));
+
+      assert.equal(await removeOrphanedNypdSegments(directory), 1);
+      assert.deepEqual(await readdir(directory), ['keep-this.txt']);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

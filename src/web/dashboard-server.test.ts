@@ -83,7 +83,7 @@ describe('DashboardServer account routes', () => {
       assert.match(homeHtml, /id="presence-total"/);
       assert.match(homeHtml, /id="presence-buff"/);
       assert.match(homeHtml, /id="presence-news"/);
-      assert.match(homeHtml, /AI-SELECTED SUMMARIES ONLY/);
+      assert.doesNotMatch(homeHtml, /MONITORING · AI-SELECTED SUMMARIES ONLY/);
       assert.match(homeHtml, /href="https:\/\/buymeacoffee\.com\/nycalert"[^>]*aria-label="Donate to NYC Alert on Buy Me a Coffee"/);
       assert.match(homeHtml, /SUPPORT NYC ALERT<\/span><strong>Donate<\/strong><span class="stat-caption">BUY ME A COFFEE/);
       assert.doesNotMatch(homeHtml, /ACTIVE AGENCIES/);
