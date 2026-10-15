@@ -36,6 +36,11 @@ async function init() {
   $('#webhook-form').addEventListener('submit', createWebhook);
   $('#analytics-form').addEventListener('submit', saveAnalytics);
   $('#clear-analytics').addEventListener('click', clearAnalytics);
+  $('#copy-sitemap-url')?.addEventListener('click', copySitemapUrl);
+  for (const name of ['openGraphTitle', 'openGraphDescription', 'openGraphImage']) {
+    const field = $('#analytics-form').elements.namedItem(name);
+    field?.addEventListener('input', renderOpenGraphPreview);
+  }
   $('#refresh-learning').addEventListener('click', loadLearningLog);
   $('#download-learning').addEventListener('click', exportLearningLog);
   $('#clear-learning').addEventListener('click', clearLearningLog);
@@ -479,28 +484,73 @@ async function loadAnalytics() {
     const data = await api('/api/admin/analytics');
     const form = $('#analytics-form');
     for (const [name, value] of Object.entries(data.settings || {})) if (form.elements[name]) form.elements[name].value = value;
+    renderOpenGraphPreview();
+    $('#sitemap-url-value').textContent = new URL('/sitemap.xml', location.origin).href;
     $('#analytics-state').textContent = data.configured ? 'Saved in persistent server storage' : 'Settings store is unavailable';
   } catch (error) { showMessage(error.message, true); }
 }
 
+async function copySitemapUrl() {
+  const sitemapUrl = new URL('/sitemap.xml', location.origin).href;
+  try {
+    await navigator.clipboard.writeText(sitemapUrl);
+    showMessage('Sitemap URL copied.');
+  } catch {
+    $('#sitemap-url-value').textContent = sitemapUrl;
+    showMessage('Select and copy the sitemap URL shown beside the button.');
+  }
+}
+
 async function saveAnalytics(event) {
   event.preventDefault();
-  const values = Object.fromEntries(new FormData(event.currentTarget));
+  const form = event.currentTarget;
+  const values = Object.fromEntries(new FormData(form));
   try {
     const data = await api('/api/admin/analytics', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
-    for (const [name, value] of Object.entries(data.settings || {})) if (event.currentTarget.elements[name]) event.currentTarget.elements[name].value = value;
+    for (const [name, value] of Object.entries(data.settings || {})) {
+      const field = form.elements.namedItem(name);
+      if (field && 'value' in field) field.value = value;
+    }
+    renderOpenGraphPreview();
     $('#analytics-state').textContent = 'Saved. Search verification meta tags are now in the page head; analytics require visitor consent.';
     showMessage('Analytics settings saved.');
   } catch (error) { showMessage(error.message, true); }
 }
 
+function renderOpenGraphPreview() {
+  const form = $('#analytics-form');
+  if (!form) return;
+  const title = form.elements.namedItem('openGraphTitle')?.value?.trim() || 'NYC Alert — Public Safety Desk';
+  const description = form.elements.namedItem('openGraphDescription')?.value?.trim()
+    || 'AI-assisted New York City public safety incident notifications and dispatch updates.';
+  const imageValue = form.elements.namedItem('openGraphImage')?.value?.trim() || '';
+  const image = $('#og-preview-image');
+  const previewTitle = $('#og-preview-title');
+  const previewDescription = $('#og-preview-description');
+  if (previewTitle) previewTitle.textContent = title;
+  if (previewDescription) previewDescription.textContent = description;
+  if (!image) return;
+  image.classList.remove('loaded');
+  image.removeAttribute('src');
+  if (!imageValue) return;
+  try {
+    const imageUrl = new URL(imageValue, location.origin);
+    if (imageUrl.origin !== location.origin && imageUrl.protocol !== 'https:') return;
+    image.onload = () => image.classList.add('loaded');
+    image.onerror = () => image.classList.remove('loaded');
+    image.src = imageUrl.href;
+  } catch { /* Invalid URLs remain represented by the preview placeholder. */ }
+}
+
 async function clearAnalytics() {
-  if (!confirm('Clear all analytics IDs and verification tokens?')) return;
+  if (!confirm('Clear all saved site settings, including analytics IDs, verification tokens, Open Graph metadata, sitemap image configuration, and Above Header Code?')) return;
   try {
     await api('/api/admin/analytics', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
     $('#analytics-form').reset();
-    $('#analytics-state').textContent = 'Settings cleared';
-    showMessage('Analytics configuration cleared.');
+    renderOpenGraphPreview();
+    $('#analytics-state').textContent = 'Site settings cleared';
+    $('#sitemap-url-value').textContent = new URL('/sitemap.xml', location.origin).href;
+    showMessage('Site settings cleared.');
   } catch (error) { showMessage(error.message, true); }
 }
 

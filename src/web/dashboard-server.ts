@@ -136,6 +136,28 @@ export class DashboardServer {
           json(response, 200, { status: 'ok' });
           return;
         }
+        if (url.pathname === '/sitemap.xml') {
+          const publicUrl = this.authConfig?.publicUrl ?? url.origin;
+          const settings = this.siteSettings?.get() ?? {};
+          response.writeHead(200, {
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Cache-Control': 'public, max-age=300',
+            'X-Content-Type-Options': 'nosniff'
+          });
+          if (request.method === 'HEAD') response.end();
+          else response.end(renderSitemapXml(this.store, publicUrl, settings));
+          return;
+        }
+        if (url.pathname === '/robots.txt') {
+          const publicUrl = this.authConfig?.publicUrl ?? url.origin;
+          response.writeHead(200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'public, max-age=3600',
+            'X-Content-Type-Options': 'nosniff'
+          });
+          response.end(`User-agent: *\nAllow: /\nDisallow: /admin\nSitemap: ${new URL('/sitemap.xml', publicUrl).toString()}\n`);
+          return;
+        }
         if (url.pathname === '/api/public-config') {
           json(response, 200, { discordApplicationId: this.discordApplicationId ?? null, analytics: this.siteSettings?.get() ?? {} });
           return;
@@ -237,7 +259,10 @@ export class DashboardServer {
         if (request.method === 'HEAD') response.end();
         else if (name.endsWith('.html')) {
           const html = await readFile(join(root, name), 'utf8');
-          response.end(injectVerificationTags(html, this.siteSettings?.get() ?? {}, cspNonce));
+          const settings = this.siteSettings?.get() ?? {};
+          const publicUrl = this.authConfig?.publicUrl ?? url.origin;
+          const page = url.pathname === '/' ? renderHomepageShareHtml(html, publicUrl, settings) : html;
+          response.end(injectVerificationTags(page, settings, cspNonce));
         } else createReadStream(join(root, name)).pipe(response);
       } catch (error) {
         logger.error({ error }, 'Dashboard request failed');
@@ -936,6 +961,67 @@ function injectVerificationTags(html: string, settings: SiteSettings, nonce: str
   return tags ? html.replace('</head>', `  ${tags}\n</head>`) : html;
 }
 
+function renderSitemapXml(store: DashboardStore, publicUrl: string, settings: SiteSettings): string {
+  const escapeXml = (value: string): string => value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;'
+  })[character]!);
+  const imageUrl = resolveOpenGraphImage(settings.openGraphImage, publicUrl);
+  const homepage = new URL('/', publicUrl).toString();
+  const urls = [
+    `<url><loc>${escapeXml(homepage)}</loc><changefreq>hourly</changefreq><priority>1.0</priority><image:image><image:loc>${escapeXml(imageUrl)}</image:loc><image:title>${escapeXml(settings.openGraphTitle || 'NYC Alert — Public Safety Desk')}</image:title></image:image></url>`
+  ];
+  for (const incident of store.search()) {
+    const loc = new URL(`/incident/${encodeURIComponent(incident.id)}`, publicUrl).toString();
+    const lastmodDate = new Date(incident.updatedAt || incident.occurredAt);
+    const lastmod = Number.isNaN(lastmodDate.getTime()) ? '' : `<lastmod>${lastmodDate.toISOString()}</lastmod>`;
+    const title = incident.title.split(' | ')[0] || 'NYC Alert Incident';
+    urls.push(`<url><loc>${escapeXml(loc)}</loc>${lastmod}<changefreq>daily</changefreq><priority>0.7</priority><image:image><image:loc>${escapeXml(imageUrl)}</image:loc><image:title>${escapeXml(title)}</image:title></image:image></url>`);
+  }
+  return '<?xml version="1.0" encoding="UTF-8"?>\n'
+    + '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">\n'
+    + `${urls.map((entry) => `  ${entry}`).join('\n')}\n</urlset>\n`;
+}
+
+function resolveOpenGraphImage(image: string | undefined, publicUrl: string): string {
+  const configured = image?.trim() || '/logo.svg';
+  try {
+    return new URL(configured, publicUrl).toString();
+  } catch {
+    return new URL('/logo.svg', publicUrl).toString();
+  }
+}
+
+function renderHomepageShareHtml(html: string, publicUrl: string, settings: SiteSettings): string {
+  const title = settings.openGraphTitle || 'NYC Alert — Public Safety Desk';
+  const description = settings.openGraphDescription
+    || 'AI-assisted New York City public safety incident notifications and dispatch updates.';
+  const canonicalUrl = new URL('/', publicUrl).toString();
+  const imageUrl = resolveOpenGraphImage(settings.openGraphImage, publicUrl);
+  const escapeAttribute = (value: string): string => value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]!);
+  const page = html
+    .replace(/<title>[\s\S]*?<\/title>/i, '')
+    .replace(/<meta\b[^>]*(?:property|name)=["'](?:og:(?:title|description|type|url|image|image:alt|image:type)|twitter:(?:card|title|description|image)|description)["'][^>]*>\s*/gi, '')
+    .replace(/<link\b[^>]*rel=["']canonical["'][^>]*>\s*/gi, '');
+  const metadata = [
+    `<title>${escapeAttribute(title)}</title>`,
+    `<meta name="description" content="${escapeAttribute(description)}">`,
+    '<meta property="og:type" content="website">',
+    `<meta property="og:title" content="${escapeAttribute(title)}">`,
+    `<meta property="og:description" content="${escapeAttribute(description)}">`,
+    `<meta property="og:url" content="${escapeAttribute(canonicalUrl)}">`,
+    `<meta property="og:image" content="${escapeAttribute(imageUrl)}">`,
+    `<meta property="og:image:alt" content="${escapeAttribute(title)}">`,
+    '<meta name="twitter:card" content="summary_large_image">',
+    `<meta name="twitter:title" content="${escapeAttribute(title)}">`,
+    `<meta name="twitter:description" content="${escapeAttribute(description)}">`,
+    `<meta name="twitter:image" content="${escapeAttribute(imageUrl)}">`,
+    `<link rel="canonical" href="${escapeAttribute(canonicalUrl)}">`
+  ].join('\n  ');
+  return page.replace('</head>', `  ${metadata}\n</head>`);
+}
+
 function verificationEmailText(firstName: string, accountType: AudienceAccountType | 'reviewer', verifyUrl: string): string {
   const audience = accountType === 'buff' ? 'Buff' : accountType === 'news' ? 'News Media' : 'Administrator';
   return `NYC ALERT | VERIFY YOUR EMAIL\n\nHello ${firstName},\n\nConfirm this address to submit your ${audience} account for administrator review.\n\nVerify email: ${verifyUrl}\n\nThis secure link expires in 24 hours. If you did not request an account, you can ignore this message.\n\nNYC Alert\nAI-assisted public safety updates. Verify independently.`;
@@ -978,7 +1064,7 @@ function renderIncidentShareHtml(
   const description = incident
     ? [incident.summary, incident.location, `${incident.agency} · ${incident.borough}`].filter(Boolean).join(' | ').slice(0, 280)
     : 'AI-assisted radio-reported incident details and updates. Verify independently.';
-  const imageUrl = new URL('/logo.svg', publicUrl).toString();
+  const imageUrl = resolveOpenGraphImage(settings.openGraphImage, publicUrl);
   const escapeAttribute = (value: string): string => value.replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[character]!);
@@ -995,7 +1081,6 @@ function renderIncidentShareHtml(
     `<meta property="og:url" content="${escapeAttribute(canonicalUrl)}">`,
     `<meta property="og:image" content="${escapeAttribute(imageUrl)}">`,
     `<meta property="og:image:alt" content="NYC Alert — ${escapeAttribute(headline)}">`,
-    '<meta property="og:image:type" content="image/svg+xml">',
     '<meta name="twitter:card" content="summary_large_image">',
     `<meta name="twitter:title" content="${escapeAttribute(headline)}">`,
     `<meta name="twitter:description" content="${escapeAttribute(description)}">`,

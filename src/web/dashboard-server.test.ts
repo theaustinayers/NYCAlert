@@ -387,4 +387,50 @@ describe('DashboardServer account routes', () => {
       assert.match(html, /href="https:\/\/discord\.gg\/EgkhPSZqtN"[^>]*>Join Our Discord<\/a>/);
     } finally { await server.stop(); }
   });
+
+  it('renders editable homepage Open Graph metadata and serves a rich public XML sitemap', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const dashboardStore = new DashboardStore(false);
+    const incident = await dashboardStore.publish({
+      title: 'Reported Fire', headline: 'Reported Fire', summary: 'Fire reported.',
+      occurredAt: new Date('2026-10-14T12:00:00.000Z'), agency: 'FDNY', borough: 'Queens', category: 'newsworthy',
+      location: '123 Main Street', locationPrecision: 'street_address', confidence: 0.9, newsworthinessScore: 4
+    });
+    const settings = new SiteSettingsStore(join(testDirectory, 'open-graph-sitemap'));
+    await settings.init();
+    await settings.update({
+      openGraphTitle: 'NYC Alert — Metro Desk',
+      openGraphDescription: 'Accurate NYC incident updates & verified locations.',
+      openGraphImage: '/social-card.jpg'
+    });
+    const server = new DashboardServer(dashboardStore, port, '127.0.0.1', undefined, undefined, {
+      publicUrl: 'https://nycalert.ai', trustProxy: false, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@nycalert.ai'
+    }, settings);
+    await server.start();
+    try {
+      const homepageResponse = await fetch(`${origin}/`);
+      const homepage = await homepageResponse.text();
+      assert.match(homepage, /<title>NYC Alert — Metro Desk<\/title>/);
+      assert.match(homepage, /property="og:description" content="Accurate NYC incident updates &amp; verified locations\."/);
+      assert.match(homepage, /property="og:image" content="https:\/\/nycalert\.ai\/social-card\.jpg"/);
+      assert.match(homepage, /name="twitter:card" content="summary_large_image"/);
+
+      const incidentResponse = await fetch(`${origin}/incident/${incident.id}`);
+      assert.match(await incidentResponse.text(), /property="og:image" content="https:\/\/nycalert\.ai\/social-card\.jpg"/);
+
+      const sitemapResponse = await fetch(`${origin}/sitemap.xml`);
+      const sitemap = await sitemapResponse.text();
+      assert.equal(sitemapResponse.headers.get('content-type'), 'application/xml; charset=utf-8');
+      assert.match(sitemap, /<urlset[^>]+xmlns:image="http:\/\/www\.google\.com\/schemas\/sitemap-image\/1\.1"/);
+      assert.match(sitemap, /<loc>https:\/\/nycalert\.ai\/<\/loc>/);
+      assert.match(sitemap, new RegExp(`<loc>https://nycalert\\.ai/incident/${incident.id}<\\/loc>`));
+      assert.match(sitemap, /<lastmod>2026-10-14T12:00:00\.000Z<\/lastmod>/);
+      assert.match(sitemap, /<image:loc>https:\/\/nycalert\.ai\/social-card\.jpg<\/image:loc>/);
+      assert.doesNotMatch(sitemap, /\/admin|\/api\//);
+
+      const robotsResponse = await fetch(`${origin}/robots.txt`);
+      assert.match(await robotsResponse.text(), /Sitemap: https:\/\/nycalert\.ai\/sitemap\.xml/);
+    } finally { await server.stop(); }
+  });
 });

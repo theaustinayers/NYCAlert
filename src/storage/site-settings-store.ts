@@ -2,6 +2,9 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 export interface SiteSettings {
+  openGraphTitle?: string;
+  openGraphDescription?: string;
+  openGraphImage?: string;
   googleAnalyticsId?: string;
   metaPixelId?: string;
   googleSiteVerification?: string;
@@ -54,6 +57,25 @@ function sanitizeSettings(input: Record<string, unknown>): SiteSettings {
     if (typeof raw !== 'string' || raw.length > 200 || !pattern.test(raw)) throw new Error(`Invalid ${key} value.`);
     return raw;
   };
+  const readText = (key: string, maxLength: number): string | undefined => {
+    const raw = input[key];
+    if (raw === undefined || raw === null || raw === '') return undefined;
+    if (typeof raw !== 'string' || raw.trim().length === 0 || raw.length > maxLength) {
+      throw new Error(`Invalid ${key} value.`);
+    }
+    return raw.trim();
+  };
+  const openGraphImage = readText('openGraphImage', 2_000);
+  if (openGraphImage) {
+    const isLocalPath = /^\/(?!\/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]+$/.test(openGraphImage)
+      && !openGraphImage.split('/').includes('..');
+    let isHttpsUrl = false;
+    try {
+      const url = new URL(openGraphImage);
+      isHttpsUrl = url.protocol === 'https:' && !url.username && !url.password && !url.hash;
+    } catch { /* A valid same-site root-relative image path is also accepted. */ }
+    if (!isLocalPath && !isHttpsUrl) throw new Error('Open Graph image must be a root-relative path or an absolute HTTPS URL.');
+  }
   const aboveHeaderCode = input.aboveHeaderCode;
   if (aboveHeaderCode !== undefined && aboveHeaderCode !== null && aboveHeaderCode !== '') {
     if (typeof aboveHeaderCode !== 'string' || aboveHeaderCode.length > 12_000) {
@@ -69,6 +91,9 @@ function sanitizeSettings(input: Record<string, unknown>): SiteSettings {
     }
   }
   return {
+    ...(readText('openGraphTitle', 120) ? { openGraphTitle: readText('openGraphTitle', 120) } : {}),
+    ...(readText('openGraphDescription', 300) ? { openGraphDescription: readText('openGraphDescription', 300) } : {}),
+    ...(openGraphImage ? { openGraphImage } : {}),
     ...(read('googleAnalyticsId', /^G-[A-Z0-9]{4,20}$/i) ? { googleAnalyticsId: read('googleAnalyticsId', /^G-[A-Z0-9]{4,20}$/i)!.toUpperCase() } : {}),
     ...(read('metaPixelId', /^\d{5,20}$/) ? { metaPixelId: read('metaPixelId', /^\d{5,20}$/)! } : {}),
     ...(read('googleSiteVerification', /^[A-Za-z0-9_-]{8,200}$/) ? { googleSiteVerification: read('googleSiteVerification', /^[A-Za-z0-9_-]{8,200}$/)! } : {}),
