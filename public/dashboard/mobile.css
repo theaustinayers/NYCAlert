@@ -1,6 +1,9 @@
 /* Responsive layout: breakpoint follows viewport width so phones/tablets work without UA sniffing. */
 .page-intro-brand { min-width: 0; }
 .homepage-wordmark { display: block; width: min(100%, 680px); height: auto; margin: 8px 0 9px; }
+.stat-card-status { justify-content: center; gap: 2px; }
+.stat-card-status > strong { margin: 4px 0 1px; color: #e8eef6; font: 800 clamp(32px, 3vw, 40px)/1 var(--display); letter-spacing: -.05em; }
+.stat-card-status > .stat-caption { margin-top: 4px; font: 9px var(--mono); letter-spacing: .04em; }
 
 @media (max-width: 900px) {
   .layout { grid-template-columns: minmax(0, 1fr); min-height: calc(100vh - 64px); }
@@ -37,10 +40,7 @@
   .stat-card { min-width: 0; padding: 11px; }
   .stat-card strong { font-size: 21px; }
   .stat-caption { font-size: 8px; }
-  .stat-card-status { justify-content: center; gap: 2px; }
-  .stat-card-status > strong { margin: 4px 0 1px; color: #e8eef6; font: 700 23px var(--display); letter-spacing: -.04em; }
-  .stat-card-status > .stat-caption { font: 9px var(--mono); letter-spacing: .04em; }
-  .stat-card-status > .stat-monitoring-caption { margin-top: 4px; color: #718096; font: 8px var(--mono); letter-spacing: .02em; }
+  .stat-card-status > strong { font-size: 32px; }
   .incidents-header { margin-top: 16px; }
   .view-tab { flex: 1 0 auto; min-height: 42px; padding: 9px 10px; }
   .filter-row { gap: 7px; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 5px; }
