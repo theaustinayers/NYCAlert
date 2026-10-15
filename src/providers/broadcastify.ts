@@ -24,6 +24,14 @@ export interface BroadcastifyFeedStatus {
   lastActivityAt?: string;
   lastStreamDataAt?: string;
   callsSeen: number;
+  /** True RMS samples from decoded NYPD PCM; never contains or retains audio. */
+  audioLevels?: number[];
+  audioMeterAt?: string;
+  /** FDNY Calls API event counts; not an audio-amplitude waveform. */
+  callActivityLevels?: number[];
+  meterSource?: 'pcm' | 'call-activity';
+  alertSeverity?: 'newsworthy' | 'breaking';
+  alertUntil?: string;
   lastError?: string;
 }
 

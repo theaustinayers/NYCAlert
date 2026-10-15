@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { describe, it } from 'node:test';
 import { DashboardStore } from '../services/dashboard-store.js';
-import { BroadcastifyStaticStreamMonitor, buildPcmSegmentArgs, createStreamDataTap, removeOrphanedNypdSegments } from './broadcastify-static-stream.js';
+import { BroadcastifyStaticStreamMonitor, buildPcmSegmentArgs, createStreamDataTap, PcmRmsMeter, removeOrphanedNypdSegments } from './broadcastify-static-stream.js';
 
 describe('buildPcmSegmentArgs', () => {
   it('writes self-contained 16 kHz mono PCM WAV segments for reliable Whisper input', () => {
@@ -17,8 +17,34 @@ describe('buildPcmSegmentArgs', () => {
     assert.ok(args.includes('-segment_format'));
     assert.ok(args.includes('wav'));
     assert.ok(args.includes('90'));
-    assert.match(args.at(-1) ?? '', /nypd-123-0-%06d\.wav$/);
+    assert.ok(args.includes('[0:a:0]asplit=2[segmentAudio][meterAudio]'));
+    assert.ok(args.includes('[meterAudio]'));
+    assert.ok(args.includes('s16le'));
+    assert.ok(args.includes('pipe:1'));
+    assert.ok(args.some((arg) => arg.replaceAll('\\', '/').endsWith('/nypd-123-0-%06d.wav')));
     assert.equal(args.includes('copy'), false);
+  });
+});
+
+describe('PcmRmsMeter', () => {
+  it('computes normalized RMS from decoded PCM across arbitrary chunk boundaries', () => {
+    const levels: number[] = [];
+    const meter = new PcmRmsMeter((level) => levels.push(level));
+    const pcm = Buffer.alloc(800 * 2);
+    for (let offset = 0; offset < pcm.length; offset += 2) pcm.writeInt16LE(8192, offset);
+
+    meter.push(pcm.subarray(0, 701));
+    meter.push(pcm.subarray(701));
+
+    assert.deepEqual(levels, [1]);
+  });
+
+  it('flatlines silence and does not retain PCM buffers', () => {
+    const levels: number[] = [];
+    const meter = new PcmRmsMeter((level) => levels.push(level));
+    meter.push(Buffer.alloc(800 * 2));
+    assert.deepEqual(levels, [0]);
+    assert.equal(Object.keys(meter).some((key) => /buffer|audio/i.test(key)), false);
   });
 });
 

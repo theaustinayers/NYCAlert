@@ -146,6 +146,8 @@ export class DashboardStore {
   private readonly liveCallAudioFiles = new Map<string, { path: string; contentType: string }>();
   private feedStatusProvider?: () => BroadcastifyFeedStatus[];
   private readonly incidentChangeListeners = new Set<() => void>();
+  private readonly feedAlerts = new Map<string, { severity: 'newsworthy' | 'breaking'; until: number }>();
+  private readonly feedCallActivity = new Map<string, number[]>();
   private readonly pipelineDiagnostics = new Map<string, PipelineDiagnostics>([['calls-api', {
     state: 'disabled', stage: 'Not configured', callsProcessed: 0, callsRetried: 0, callsFailed: 0
   }]]);
@@ -162,7 +164,46 @@ export class DashboardStore {
   }
 
   getFeedStatuses(): BroadcastifyFeedStatus[] {
-    return this.feedStatusProvider?.() ?? [];
+    const now = Date.now();
+    const statuses = this.feedStatusProvider?.() ?? [];
+    return statuses.map((status) => {
+      const key = feedKey(status.agency, status.borough);
+      const alert = this.feedAlerts.get(key);
+      if (alert && alert.until <= now) this.feedAlerts.delete(key);
+      const activeAlert = alert && alert.until > now ? alert : undefined;
+      const activity = (this.feedCallActivity.get(key) ?? []).filter((timestamp) => timestamp > now - 5 * 60_000);
+      if (activity.length) this.feedCallActivity.set(key, activity);
+      else this.feedCallActivity.delete(key);
+      const buckets = Array.from({ length: 40 }, (_, index) => {
+        const start = now - (39 - index) * 7_500;
+        return activity.filter((timestamp) => timestamp >= start && timestamp < start + 7_500).length;
+      });
+      const maxBucket = Math.max(1, ...buckets);
+      return {
+        ...status,
+        ...(activeAlert ? { alertSeverity: activeAlert.severity, alertUntil: new Date(activeAlert.until).toISOString() } : {}),
+        callActivityLevels: buckets.map((value) => value / maxBucket),
+        meterSource: status.audioLevels ? 'pcm' as const : 'call-activity' as const
+      };
+    });
+  }
+
+  recordFeedCallActivity(agency: Agency, borough: Borough | 'Citywide', occurredAt = Date.now()): void {
+    const key = feedKey(agency, borough);
+    const activity = (this.feedCallActivity.get(key) ?? []).filter((timestamp) => timestamp > occurredAt - 5 * 60_000);
+    activity.push(occurredAt);
+    this.feedCallActivity.set(key, activity.slice(-200));
+  }
+
+  setFeedCallAlert(agency: Agency, borough: Borough | 'Citywide', severity: 'newsworthy' | 'breaking', now = Date.now()): void {
+    const key = feedKey(agency, borough);
+    const current = this.feedAlerts.get(key);
+    const requestedUntil = now + (severity === 'breaking' ? 30_000 : 15_000);
+    if (current && current.until > now && current.severity === 'breaking' && severity === 'newsworthy') return;
+    this.feedAlerts.set(key, {
+      severity: current?.until && current.until > now && current.severity === 'breaking' ? 'breaking' : severity,
+      until: Math.max(current?.until ?? 0, requestedUntil)
+    });
   }
 
   setPipelineDiagnostics(diagnostics: PipelineDiagnostics, pipeline = 'calls-api'): void {
@@ -446,6 +487,10 @@ function isValidCoordinates(latitude?: number, longitude?: number): boolean {
     && typeof longitude === 'number' && Number.isFinite(longitude)
     && latitude >= 40.45 && latitude <= 40.95
     && longitude >= -74.30 && longitude <= -73.65;
+}
+
+function feedKey(agency: Agency, borough: Borough | 'Citywide'): string {
+  return `${agency}:${borough}`;
 }
 
 function formatIncidentTitle(

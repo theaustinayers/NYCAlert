@@ -133,20 +133,44 @@ function renderFeeds() {
   $('#feed-list').innerHTML = state.feeds
     .filter((feed) => state.boroughs.size > 0 && (feed.borough === 'Citywide' || state.boroughs.has(feed.borough)))
     .map((feed) => {
-    const streamDataAt = feed.lastStreamDataAt;
-    const activityAt = streamDataAt || feed.lastActivityAt;
+    const isFdny = feed.agency === 'FDNY';
+    const activityAt = isFdny ? feed.lastActivityAt : feed.lastStreamDataAt;
     const stateLabel = feed.state === 'online' ? 'ONLINE'
       : feed.state === 'offline' ? 'OFFLINE' : 'NOT MONITORED';
-    const activityText = activityAt ? `Audio ${escapeHtml(timeAgo(activityAt))}` : 'No audio yet';
+    const activityText = activityAt ? `${isFdny ? 'Call' : 'Audio'} ${escapeHtml(timeAgo(activityAt))}` : isFdny ? 'No calls yet' : 'No audio yet';
+    const latestActivityAge = activityAt ? Date.now() - Date.parse(activityAt) : Number.POSITIVE_INFINITY;
+    const syntheticWaveActive = feed.meterSource === 'call-activity' && latestActivityAge >= 0 && latestActivityAge < 20_000;
+    const meterLevels = feed.meterSource === 'pcm'
+      ? feed.audioLevels
+      : syntheticWaveActive ? buildSyntheticCallWave(feed.id, Date.now()) : feed.callActivityLevels;
+    const meterLabel = feed.meterSource === 'pcm'
+      ? 'LIVE AUDIO LEVEL · PCM'
+      : syntheticWaveActive ? 'FDNY call-activity animation; not an audio-level measurement' : 'FDNY call activity; not an audio-level measurement';
+    const alertActive = feed.alertUntil && Date.parse(feed.alertUntil) > Date.now();
+    const alertSeverity = alertActive ? feed.alertSeverity : undefined;
+    const alertClass = alertSeverity === 'breaking' ? ' feed-alert-breaking' : alertSeverity === 'newsworthy' ? ' feed-alert-newsworthy' : '';
+    const bars = (Array.isArray(meterLevels) ? meterLevels : Array.from({ length: 40 }, () => 0)).slice(-40);
+    const meter = bars.map((level) => `<span class="feed-meter-bar" style="--meter-level:${Math.round(Math.max(0, Math.min(1, Number(level) || 0)) * 100)}%"></span>`).join('');
     return `
-    <article class="feed-card">
+    <article class="feed-card${alertClass}"${alertSeverity ? ` data-alert-severity="${alertSeverity}"` : ''}>
       <div class="feed-top"><span class="agency-tag ${feed.agency === 'NYPD' ? 'nypd' : ''}">${escapeHtml(feed.agency)}</span><span class="feed-state ${escapeHtml(feed.state)}"><i class="health-dot ${escapeHtml(feed.state)}"></i>${stateLabel}</span></div>
       <div class="feed-name">${escapeHtml(feed.name)}</div>
       <div class="feed-location">${escapeHtml(feed.borough)}</div>
-      <div class="feed-metrics"><div class="feed-metric"><span>CALLS SEEN</span><strong>${Number(feed.callsSeen) || 0}</strong></div><div class="feed-metric"><span>LAST AUDIO</span><strong class="${activityAt && isRecent(activityAt) ? 'recent' : ''}">${activityText}</strong></div></div>
+      <div class="feed-meter-wrap"><div class="feed-meter${syntheticWaveActive ? ' feed-meter-active' : ''}" role="img" aria-label="${meterLabel}">${meter}</div>${feed.meterSource === 'pcm' ? `<span class="feed-meter-label">${meterLabel}</span>` : ''}</div>
+      <div class="feed-metrics"><div class="feed-metric"><span>CALLS SEEN</span><strong>${Number(feed.callsSeen) || 0}</strong></div><div class="feed-metric"><span>${isFdny ? 'LAST CALL' : 'LAST AUDIO'}</span><strong class="${activityAt && isRecent(activityAt) ? 'recent' : ''}">${activityText}</strong></div></div>
       ${feed.lastError ? `<span class="feed-error">${escapeHtml(feed.lastError)}</span>` : ''}
     </article>`;
   }).join('');
+}
+
+function buildSyntheticCallWave(seedValue, now = Date.now()) {
+  const seed = [...String(seedValue)].reduce((value, character) => (value * 31 + character.charCodeAt(0)) >>> 0, 7);
+  const phase = Math.floor(now / 220) * 0.73 + seed % 97;
+  return Array.from({ length: 40 }, (_, index) => {
+    const noise = Math.abs(Math.sin((seed % 997 + index * 73.1 + phase) * 12.9898));
+    const envelope = 0.16 + 0.84 * Math.abs(Math.sin(index * 0.39 + phase));
+    return 0.08 + noise * envelope * 0.72;
+  });
 }
 
 function formatTime(value) {
@@ -708,6 +732,18 @@ async function refresh() {
   }
 }
 
+async function refreshFeedTelemetry() {
+  if (document.visibilityState !== 'visible') return;
+  try {
+    const params = boroughQueryParams(new URLSearchParams());
+    const response = await fetch(`/api/feeds${params.toString() ? `?${params}` : ''}`, { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json();
+    state.feeds = Array.isArray(data.feeds) ? data.feeds : [];
+    renderFeeds();
+  } catch { /* Preserve the last feed display during transient network errors. */ }
+}
+
 function getPresenceBrowserToken() {
   const key = 'nycalert-presence-session';
   try {
@@ -761,6 +797,8 @@ async function initialize() {
   void initializePublicConfig();
   void heartbeatPresence();
   state.presenceTimer = setInterval(heartbeatPresence, 20_000);
+  void refreshFeedTelemetry();
+  setInterval(refreshFeedTelemetry, 1_000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void heartbeatPresence();
   });

@@ -209,7 +209,21 @@ export class DashboardServer {
           const statuses = this.store.getFeedStatuses();
           const feeds: Array<Record<string, unknown>> = dashboardFeedLinks.map((feed) => {
             const status = statuses.find((item) => item.agency === feed.agency && item.borough === feed.borough);
-            return { ...feed, state: status?.state ?? 'unknown', lastAttemptAt: status?.lastAttemptAt, lastSuccessAt: status?.lastSuccessAt, lastActivityAt: status?.lastActivityAt, lastStreamDataAt: status?.lastStreamDataAt, callsSeen: status?.callsSeen ?? 0, lastError: status?.lastError };
+            return {
+              ...feed,
+              state: status?.state ?? 'unknown',
+              lastAttemptAt: status?.lastAttemptAt,
+              lastSuccessAt: status?.lastSuccessAt,
+              lastActivityAt: status?.lastActivityAt,
+              lastStreamDataAt: status?.lastStreamDataAt,
+              callsSeen: status?.callsSeen ?? 0,
+              ...(status?.audioLevels ? { audioLevels: status.audioLevels } : {}),
+              ...(status?.audioMeterAt ? { audioMeterAt: status.audioMeterAt } : {}),
+              ...(status?.callActivityLevels ? { callActivityLevels: status.callActivityLevels } : {}),
+              ...(status?.meterSource ? { meterSource: status.meterSource } : {}),
+              ...(status?.alertSeverity ? { alertSeverity: status.alertSeverity, alertUntil: status.alertUntil } : {}),
+              lastError: status?.lastError
+            };
           }).filter((feed) => boroughMatches(feed.borough as Borough | 'Citywide', boroughs));
           const known = new Set(feeds.map((feed) => `${feed.agency}:${feed.borough}`));
           for (const status of statuses) {
@@ -218,7 +232,13 @@ export class DashboardServer {
             feeds.push({
               id: status.id, name: status.name, agency: status.agency, borough: status.borough,
               url: '', state: status.state, lastAttemptAt: status.lastAttemptAt, lastSuccessAt: status.lastSuccessAt,
-              lastActivityAt: status.lastActivityAt, lastStreamDataAt: status.lastStreamDataAt, callsSeen: status.callsSeen, lastError: status.lastError
+              lastActivityAt: status.lastActivityAt, lastStreamDataAt: status.lastStreamDataAt, callsSeen: status.callsSeen,
+              ...(status.audioLevels ? { audioLevels: status.audioLevels } : {}),
+              ...(status.audioMeterAt ? { audioMeterAt: status.audioMeterAt } : {}),
+              ...(status.callActivityLevels ? { callActivityLevels: status.callActivityLevels } : {}),
+              ...(status.meterSource ? { meterSource: status.meterSource } : {}),
+              ...(status.alertSeverity ? { alertSeverity: status.alertSeverity, alertUntil: status.alertUntil } : {}),
+              lastError: status.lastError
             });
           }
           json(response, 200, { feeds });

@@ -144,6 +144,26 @@ describe('DashboardStore', () => {
     assert.equal(await store.promoteLiveCallFromCommunity(routine.id, { up: 100, down: 0 }), undefined);
   });
 
+  it('adds recent FDNY call activity and timed per-feed Newsworthy/Breaking flash state', () => {
+    const store = new DashboardStore(false);
+    const now = Date.now();
+    store.setFeedStatusProvider(() => [{
+      id: 'fdny-queens', name: 'FDNY Queens Dispatch', agency: 'FDNY', borough: 'Queens', state: 'online', callsSeen: 4
+    }]);
+    store.recordFeedCallActivity('FDNY', 'Queens', now);
+    store.setFeedCallAlert('FDNY', 'Queens', 'newsworthy', now);
+    let status = store.getFeedStatuses()[0]!;
+    assert.equal(status.meterSource, 'call-activity');
+    assert.ok(status.callActivityLevels?.some((level) => level > 0));
+    assert.equal(status.alertSeverity, 'newsworthy');
+    assert.equal(Date.parse(status.alertUntil!) - now, 15_000);
+
+    store.setFeedCallAlert('FDNY', 'Queens', 'breaking', now + 1);
+    status = store.getFeedStatuses()[0]!;
+    assert.equal(status.alertSeverity, 'breaking');
+    assert.equal(Date.parse(status.alertUntil!) - now, 30_001);
+  });
+
   it('upgrades a generic incident title when a follow-up identifies smoke from the roof', async () => {
     const store = new DashboardStore(false);
     const incident = await store.publish({

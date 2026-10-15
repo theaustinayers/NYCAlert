@@ -267,6 +267,10 @@ export class CallProcessor {
       ...analyzedTriage,
       headline: curateIncidentHeadline(analyzedTriage.headline, transcript, call.agency)
     };
+    if (call.agency === 'FDNY') this.dashboard.recordFeedCallActivity(call.agency, call.borough, call.occurredAt.getTime());
+    if (triage.category === 'newsworthy' || triage.category === 'breaking') {
+      this.dashboard.setFeedCallAlert(call.agency, call.borough, triage.category);
+    }
     trace.headline = triage.headline;
     trace.summary = triage.summary;
     trace.category = triage.category;

@@ -14,11 +14,47 @@ export type StreamSpawner = typeof nodeSpawn;
 
 export function buildPcmSegmentArgs(segmentDirectory: string, outputPrefix: string, segmentSeconds: number): string[] {
   return [
-    '-nostdin', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vn',
-    '-c:a', 'pcm_s16le', '-ar', '16000', '-ac', '1',
+    '-nostdin', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0',
+    '-filter_complex', '[0:a:0]asplit=2[segmentAudio][meterAudio]',
+    '-map', '[segmentAudio]', '-vn', '-c:a', 'pcm_s16le', '-ar', '16000', '-ac', '1',
     '-f', 'segment', '-segment_format', 'wav', '-segment_time', String(segmentSeconds),
-    '-reset_timestamps', '1', join(segmentDirectory, `${outputPrefix}-%06d.wav`)
+    '-reset_timestamps', '1', join(segmentDirectory, `${outputPrefix}-%06d.wav`),
+    '-map', '[meterAudio]', '-vn', '-c:a', 'pcm_s16le', '-ar', '8000', '-ac', '1', '-f', 's16le', 'pipe:1'
   ];
+}
+
+/** Converts decoded signed 16-bit mono PCM into short-window normalized RMS samples. */
+export class PcmRmsMeter {
+  private readonly windowSamples: number;
+  private sumSquares = 0;
+  private sampleCount = 0;
+  private trailingByte?: number;
+
+  constructor(private readonly onLevel: (level: number) => void, sampleRate = 8_000, windowMs = 80) {
+    this.windowSamples = Math.max(1, Math.floor(sampleRate * windowMs / 1_000));
+  }
+
+  push(chunk: Buffer): void {
+    let offset = 0;
+    if (this.trailingByte !== undefined && chunk.length) {
+      this.pushSample(this.trailingByte | (chunk[0]! << 8));
+      this.trailingByte = undefined;
+      offset = 1;
+    }
+    for (; offset + 1 < chunk.length; offset += 2) this.pushSample(chunk.readInt16LE(offset));
+    if (offset < chunk.length) this.trailingByte = chunk[offset];
+  }
+
+  private pushSample(sample: number): void {
+    const normalized = sample / 32768;
+    this.sumSquares += normalized * normalized;
+    this.sampleCount += 1;
+    if (this.sampleCount < this.windowSamples) return;
+    const rms = Math.sqrt(this.sumSquares / this.sampleCount);
+    this.onLevel(rms < 0.003 ? 0 : Math.min(1, rms / 0.2));
+    this.sumSquares = 0;
+    this.sampleCount = 0;
+  }
 }
 
 export function createStreamDataTap(onData: () => void): Transform {
@@ -73,6 +109,9 @@ export class BroadcastifyStaticStreamMonitor {
   private lastSuccessAt?: number;
   private lastActivityAt?: number;
   private lastStreamDataAt?: number;
+  private lastAudioMeterAt?: number;
+  private audioLevels = Array.from({ length: 48 }, () => 0);
+  private pcmMeter?: PcmRmsMeter;
   private lastAttemptAt?: number;
   private callsSeen = 0;
   private callsProcessed = 0;
@@ -121,6 +160,9 @@ export class BroadcastifyStaticStreamMonitor {
       ...(this.lastSuccessAt ? { lastSuccessAt: new Date(this.lastSuccessAt).toISOString() } : {}),
       ...(this.lastActivityAt ? { lastActivityAt: new Date(this.lastActivityAt).toISOString() } : {}),
       ...(this.lastStreamDataAt ? { lastStreamDataAt: new Date(this.lastStreamDataAt).toISOString() } : {}),
+      audioLevels: this.connected && this.lastAudioMeterAt && now - this.lastAudioMeterAt <= 1_000 ? [...this.audioLevels] : Array.from({ length: this.audioLevels.length }, () => 0),
+      ...(this.lastAudioMeterAt ? { audioMeterAt: new Date(this.lastAudioMeterAt).toISOString() } : {}),
+      meterSource: 'pcm',
       callsSeen: this.callsSeen,
       ...(this.lastError ? { lastError: this.lastError } : {})
     }];
@@ -185,8 +227,16 @@ export class BroadcastifyStaticStreamMonitor {
       this.segmentDirectory,
       `nypd-${Date.now()}-${this.streamSequence++}`,
       this.options.segmentSeconds
-    ), { stdio: ['pipe', 'ignore', 'pipe'] });
+    ), { stdio: ['pipe', 'pipe', 'pipe'] });
     this.child = child;
+    this.audioLevels = Array.from({ length: 48 }, () => 0);
+    this.lastAudioMeterAt = undefined;
+    this.pcmMeter = new PcmRmsMeter((level) => {
+      this.audioLevels.push(level);
+      if (this.audioLevels.length > 48) this.audioLevels.shift();
+      this.lastAudioMeterAt = Date.now();
+    });
+    child.stdout?.on('data', (chunk: Buffer) => this.pcmMeter?.push(chunk));
     let stderr = '';
     child.stderr?.on('data', (chunk: Buffer) => { stderr = `${stderr}${chunk.toString()}`.slice(-2_000); });
     child.once('error', (error) => { this.lastError = sanitizeError(error); });
@@ -206,6 +256,7 @@ export class BroadcastifyStaticStreamMonitor {
       this.child = undefined;
       this.controller = undefined;
       this.connected = false;
+      this.pcmMeter = undefined;
       if (stderr.trim()) this.lastError = sanitizeError(new Error(stderr.trim()));
     }
   }
