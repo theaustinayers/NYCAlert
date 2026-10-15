@@ -872,6 +872,10 @@ export class DashboardServer {
         json(response, 404, { error: 'Incident not found.' });
         return;
       }
+      if ((incident.category as string) === 'routine') {
+        json(response, 400, { error: 'Routine radio traffic is not eligible for votes.' });
+        return;
+      }
       const result = this.incidentVotes.castVote(incident, deviceId, body.vote);
       if (result.accepted) {
         this.learningLog?.recordIncidentFeedback({

@@ -195,7 +195,7 @@ function renderIncidents() {
       ${incident.updateCount ? `<details class="incident-updates"><summary>${incident.updateCount} follow-up update(s)</summary>${incident.updates.map((update) => `<p><strong>${escapeHtml(update.agency || incident.agency)} report</strong> · ${escapeHtml(formatTime(update.occurredAt))} — ${escapeHtml(update.summary)}${update.unitIds.length ? ` <strong>[${escapeHtml(update.unitIds.join(', '))}]</strong>` : ''}${update.unitAssignments?.some((assignment) => assignment.actingAsUnitId) ? ` <strong>[acting as: ${update.unitAssignments.filter((assignment) => assignment.actingAsUnitId).map((assignment) => `${escapeHtml(assignment.unitId)} → ${escapeHtml(assignment.actingAsUnitId)}`).join(', ')}]</strong>` : ''}</p>`).join('')}</details>` : ''}
       ${incident.hasAudio ? `<audio class="audio-player" controls preload="none" src="/api/incidents/${encodeURIComponent(incident.id)}/audio">Your browser does not support audio playback.</audio>` : ''}
       <div class="incident-card-foot"><span class="incident-source">AI-ASSISTED · VERIFY INDEPENDENTLY</span><span class="confidence"><strong>${state.audience === 'buff' ? 'BUFF' : state.audience === 'news' ? 'NEWS MEDIA' : 'PUBLIC'} ${audienceScore}/5</strong> · PUBLIC ${newsScore}/5 · DESK ${deskScore}/5 · BUFF ${buffScore}/5 · TRIAGE FIT ${Math.round(Math.max(0, Math.min(1, Number(incident.confidence) || 0)) * 100)}%</span></div>
-      <div class="incident-vote-row" aria-label="Community feedback"><span class="incident-vote-caption">WAS THIS USEFUL? <small>Feedback helps evaluate future AI summaries; it does not verify the event.</small></span><div class="incident-vote-controls"><button class="incident-vote-button ${incident.votes?.myVote === 'up' ? 'selected' : ''}" type="button" data-incident-vote="up" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Thumbs up, ${Number(incident.votes?.up) || 0} votes" aria-pressed="${incident.votes?.myVote === 'up'}" ${incident.votes?.myVote ? 'disabled' : ''}><span aria-hidden="true">👍</span><span>${Number(incident.votes?.up) || 0}</span></button><button class="incident-vote-button ${incident.votes?.myVote === 'down' ? 'selected' : ''}" type="button" data-incident-vote="down" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Thumbs down, ${Number(incident.votes?.down) || 0} votes" aria-pressed="${incident.votes?.myVote === 'down'}" ${incident.votes?.myVote ? 'disabled' : ''}><span aria-hidden="true">👎</span><span>${Number(incident.votes?.down) || 0}</span></button></div><span class="incident-vote-feedback" role="status" aria-live="polite"></span></div>
+      ${incident.category !== 'routine' ? `<div class="incident-vote-row" aria-label="Community feedback"><span class="incident-vote-caption">WAS THIS USEFUL? <small>Feedback helps evaluate future AI summaries; it does not verify the event.</small></span><div class="incident-vote-controls"><button class="incident-vote-button ${incident.votes?.myVote === 'up' ? 'selected' : ''}" type="button" data-incident-vote="up" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Thumbs up, ${Number(incident.votes?.up) || 0} votes" aria-pressed="${incident.votes?.myVote === 'up'}" ${incident.votes?.myVote ? 'disabled' : ''}><span aria-hidden="true">👍</span><span>${Number(incident.votes?.up) || 0}</span></button><button class="incident-vote-button ${incident.votes?.myVote === 'down' ? 'selected' : ''}" type="button" data-incident-vote="down" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Thumbs down, ${Number(incident.votes?.down) || 0} votes" aria-pressed="${incident.votes?.myVote === 'down'}" ${incident.votes?.myVote ? 'disabled' : ''}><span aria-hidden="true">👎</span><span>${Number(incident.votes?.down) || 0}</span></button></div><span class="incident-vote-feedback" role="status" aria-live="polite"></span></div>` : ''}
       <div class="incident-share-row" aria-label="Share incident"><button class="incident-share-button incident-social-share" type="button" data-share-service="facebook" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Share incident on Facebook" title="Share on Facebook">f</button><button class="incident-share-button incident-social-share" type="button" data-share-service="x" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Share incident on X" title="Share on X">𝕏</button><button class="incident-share-button copy-incident-url" type="button" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Copy incident URL" title="Copy URL"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6.5" y="6.5" width="9" height="11" rx="1.5"></rect><path d="M13.5 6V4.5A1.5 1.5 0 0 0 12 3H5.5A1.5 1.5 0 0 0 4 4.5v9A1.5 1.5 0 0 0 5.5 15H6"></path></svg></button><span class="share-copy-feedback" role="status" aria-live="polite"></span></div>
     </article>`;
   }).join('');
@@ -880,6 +880,14 @@ document.querySelectorAll('.filter-chip').forEach((button) => button.addEventLis
   renderLiveCalls();
 }));
 
+document.querySelectorAll('[data-live-agency]').forEach((button) => button.addEventListener('click', () => {
+  toggleLiveCallFilter('agency', button.dataset.liveAgency);
+}));
+
+document.querySelectorAll('[data-live-category]').forEach((button) => button.addEventListener('click', () => {
+  toggleLiveCallFilter('category', button.dataset.liveCategory);
+}));
+
 $('#incident-sort').addEventListener('change', (event) => {
   state.sortMode = event.target.value;
   renderIncidents();
@@ -898,6 +906,7 @@ function setView(view) {
   $('#incident-list').hidden = !incidentsActive;
   $('#live-calls-list').hidden = incidentsActive;
   $('#incident-filters').hidden = !incidentsActive;
+  $('#live-call-filters').hidden = incidentsActive;
   $('#search').placeholder = incidentsActive ? 'Search alerts…' : 'Search radio calls…';
 }
 

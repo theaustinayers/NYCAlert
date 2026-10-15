@@ -452,6 +452,11 @@ describe('DashboardServer account routes', () => {
       agency: 'FDNY', borough: 'Queens', category: 'newsworthy', incidentType: 'fire',
       confidence: 0.9, newsworthinessScore: 4, buffInterestScore: 5, assignmentDeskScore: 4
     });
+    const routineIncident = await dashboardStore.publish({
+      title: 'Routine Status', headline: 'Routine Status', summary: 'Routine radio status.', occurredAt: new Date(),
+      agency: 'FDNY', borough: 'Queens', category: 'routine' as never,
+      confidence: 0.95, newsworthinessScore: 1
+    });
     const voteStore = new IncidentVoteStore(join(testDirectory, 'incident-votes-server'));
     await voteStore.init();
     const learningLog = new LearningLog(join(testDirectory, 'incident-vote-learning'), true, 30, 100);
@@ -477,8 +482,15 @@ describe('DashboardServer account routes', () => {
       assert.equal(duplicate.status, 200);
       assert.deepEqual(await duplicate.json(), { up: 1, down: 0, myVote: 'up', accepted: false, message: 'This device has already voted on this incident.' });
 
+      const routineVote = await fetch(`${origin}/api/incidents/${routineIncident.id}/vote`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, vote: 'up' })
+      });
+      assert.equal(routineVote.status, 400);
+      assert.match((await routineVote.json()).error, /Routine radio traffic is not eligible/);
+
       const incidents = await fetch(`${origin}/api/incidents?deviceId=${encodeURIComponent(deviceId)}`).then((response) => response.json());
-      assert.deepEqual(incidents.incidents[0]?.votes, { up: 1, down: 0, myVote: 'up' });
+      assert.deepEqual(incidents.incidents.find((item: { id: string }) => item.id === incident.id)?.votes, { up: 1, down: 0, myVote: 'up' });
       await learningLog.flush();
       const feedback = (await learningLog.readRecent(20)).find((event) => event.stage === 'incident-feedback');
       assert.equal(feedback?.feedbackVote, 'up');
