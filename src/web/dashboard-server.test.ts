@@ -10,6 +10,7 @@ import { DashboardStore } from '../services/dashboard-store.js';
 import { AccountStore } from '../storage/account-store.js';
 import { LearningLog } from '../services/learning-log.js';
 import { SiteSettingsStore } from '../storage/site-settings-store.js';
+import { IncidentVoteStore } from '../services/incident-vote-store.js';
 import { DashboardServer } from './dashboard-server.js';
 
 const testDirectory = await mkdtemp(join(tmpdir(), 'nyc-dashboard-server-'));
@@ -80,6 +81,9 @@ describe('DashboardServer account routes', () => {
       assert.match(homeHtml, /href="https:\/\/discord\.gg\/gcfCBkMG8C"[^>]*>Join Our Discord<\/a>/);
       assert.match(homeHtml, /<span class="stat-label">MONITORING<\/span>/);
       assert.match(homeHtml, /<span class="stat-caption">AI-SELECTED SUMMARIES ONLY<\/span>/);
+      assert.match(homeHtml, /href="https:\/\/buymeacoffee\.com\/nycalert"[^>]*aria-label="Donate to NYC Alert on Buy Me a Coffee"/);
+      assert.match(homeHtml, /SUPPORT NYC ALERT<\/span><strong>Donate<\/strong><span class="stat-caption">BUY ME A COFFEE/);
+      assert.doesNotMatch(homeHtml, /ACTIVE AGENCIES/);
       assert.match(homeHtml, /DISCORD COMMUNITY<\/span><strong>1,800\+<\/strong>/);
       assert.doesNotMatch(homeHtml, /class="listen-link"|LISTEN ↗/);
       const page = await fetch(`${origin}/admin`);
@@ -437,5 +441,52 @@ describe('DashboardServer account routes', () => {
       const robotsResponse = await fetch(`${origin}/robots.txt`);
       assert.match(await robotsResponse.text(), /Sitemap: https:\/\/nycalert\.ai\/sitemap\.xml/);
     } finally { await server.stop(); }
+  });
+
+  it('records one vote per device and logs accepted incident feedback without device identifiers', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const dashboardStore = new DashboardStore(false);
+    const incident = await dashboardStore.publish({
+      title: 'Reported Fire', headline: 'Reported Fire', summary: 'Fire reported.', occurredAt: new Date(),
+      agency: 'FDNY', borough: 'Queens', category: 'newsworthy', incidentType: 'fire',
+      confidence: 0.9, newsworthinessScore: 4, buffInterestScore: 5, assignmentDeskScore: 4
+    });
+    const voteStore = new IncidentVoteStore(join(testDirectory, 'incident-votes-server'));
+    await voteStore.init();
+    const learningLog = new LearningLog(join(testDirectory, 'incident-vote-learning'), true, 30, 100);
+    await learningLog.init();
+    const server = new DashboardServer(dashboardStore, port, '127.0.0.1', undefined, undefined, undefined, undefined, learningLog, undefined, undefined, voteStore);
+    const deviceId = 'd03d9d92-17bb-4eb8-9f20-09a6b4a12d6f';
+    await server.start();
+    try {
+      const denied = await fetch(`${origin}/api/incidents/${incident.id}/vote`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, vote: 'up' })
+      });
+      assert.equal(denied.status, 403);
+
+      const vote = async (choice: 'up' | 'down') => fetch(`${origin}/api/incidents/${incident.id}/vote`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, vote: choice })
+      });
+      const accepted = await vote('up');
+      assert.equal(accepted.status, 200);
+      assert.deepEqual(await accepted.json(), { up: 1, down: 0, myVote: 'up', accepted: true, message: 'Vote recorded.' });
+      const duplicate = await vote('down');
+      assert.equal(duplicate.status, 200);
+      assert.deepEqual(await duplicate.json(), { up: 1, down: 0, myVote: 'up', accepted: false, message: 'This device has already voted on this incident.' });
+
+      const incidents = await fetch(`${origin}/api/incidents?deviceId=${encodeURIComponent(deviceId)}`).then((response) => response.json());
+      assert.deepEqual(incidents.incidents[0]?.votes, { up: 1, down: 0, myVote: 'up' });
+      await learningLog.flush();
+      const feedback = (await learningLog.readRecent(20)).find((event) => event.stage === 'incident-feedback');
+      assert.equal(feedback?.feedbackVote, 'up');
+      assert.equal(feedback?.incidentId, incident.id);
+      assert.equal(JSON.stringify(feedback).includes(deviceId), false);
+    } finally {
+      await server.stop();
+      voteStore.close();
+    }
   });
 });

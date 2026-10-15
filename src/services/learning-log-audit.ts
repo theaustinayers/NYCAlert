@@ -13,7 +13,7 @@ const knownPrecisions = new Set(['rooftop', 'street_address', 'intersection', 'r
 const boroughOnlyLocations = new Set(['manhattan', 'bronx', 'queens', 'brooklyn', 'staten island', 'citywide']);
 
 const knownStages = new Set([
-  'received', 'transcription', 'transcription-error', 'transcription-ignored', 'source-duplicate-suppressed', 'repeat-suppressed',
+  'received', 'transcription', 'transcription-error', 'transcription-ignored', 'source-duplicate-suppressed', 'incident-feedback', 'repeat-suppressed',
   'triage', 'triage-error', 'geocoding', 'correlation', 'pending-queue', 'incident-published',
   'incident-updated', 'incident-suppressed', 'incident-withheld', 'discord-routing', 'x-publishing', 'pending-expired',
   'pending-attached', 'pending-discarded', 'pending-approved', 'retry', 'error'
@@ -70,6 +70,8 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
   const routingOutcomes: Record<string, number> = {};
   const geocodePrecisions: Record<string, number> = {};
   const xPublishingOutcomes: Record<string, number> = {};
+  const feedbackVotes: Record<string, number> = {};
+  const feedbackIncidentTypes: Record<string, number> = {};
   const publishedIdsBySourceCall = new Map<string, Set<string>>();
   const events = new Map<string, EventSummary>();
   let totalLines = 0;
@@ -96,6 +98,7 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
   let publishedRecords = 0;
   let publishedWithoutPublicQualification = 0;
   let publishedRoutineRecords = 0;
+  let feedbackRecords = 0;
 
   for await (const line of lines) {
     totalLines += 1;
@@ -108,7 +111,7 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
 
     const stage = typeof parsed.stage === 'string' && knownStages.has(parsed.stage) ? parsed.stage : undefined;
     increment(stageRecords, stage);
-    const eventId = typeof parsed.eventId === 'string' ? parsed.eventId : undefined;
+    const eventId = stage !== 'incident-feedback' && typeof parsed.eventId === 'string' ? parsed.eventId : undefined;
     if (!eventId) recordsWithoutEventId += 1;
     const event = eventId ? (events.get(eventId) ?? { stages: new Set<string>() }) : undefined;
     if (event && stage) {
@@ -192,6 +195,12 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
         'x-post-created', 'x-post-failed', 'x-post-withheld-sensitive-medical', 'x-post-skipped-incident-unavailable'
       ]));
     }
+
+    if (stage === 'incident-feedback') {
+      feedbackRecords += 1;
+      incrementKnown(feedbackVotes, parsed.feedbackVote, new Set(['up', 'down']));
+      incrementKnown(feedbackIncidentTypes, parsed.incidentType, knownIncidentTypes);
+    }
   }
 
   const latestObservedStageCounts: Record<string, number> = {};
@@ -261,6 +270,11 @@ export async function analyzeLearningLog(lines: Iterable<string> | AsyncIterable
       sourceCallsWithMultipleIncidentIds
     },
     xPublishing: { records: Object.values(xPublishingOutcomes).reduce((sum, count) => sum + count, 0), outcomes: xPublishingOutcomes },
+    feedback: {
+      records: feedbackRecords,
+      votes: feedbackVotes,
+      incidentTypes: feedbackIncidentTypes
+    },
     discord: {
       routingRecords: discordRoutingRecords,
       outcomes: routingOutcomes,

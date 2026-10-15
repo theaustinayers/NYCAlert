@@ -13,6 +13,7 @@ import type { SiteSettings, SiteSettingsStore } from '../storage/site-settings-s
 import type { LearningLog } from '../services/learning-log.js';
 import type { DeploymentUpdater } from '../services/deployment-updater.js';
 import type { XIntegrationTester } from '../providers/x-post.js';
+import { isIncidentVote, type IncidentVoteStore } from '../services/incident-vote-store.js';
 import { logger } from '../logger.js';
 
 export interface DashboardAuthConfig {
@@ -82,6 +83,12 @@ function boroughMatches(value: Borough | 'Citywide', selected?: Borough[]): bool
   return value === 'Citywide' || selected.includes(value);
 }
 
+function validVoteDeviceId(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value.toLowerCase()
+    : undefined;
+}
+
 export class DashboardServer {
   private server?: ReturnType<typeof createServer>;
   private readonly eventClients = new Set<ServerResponse>();
@@ -101,7 +108,8 @@ export class DashboardServer {
     private readonly siteSettings?: SiteSettingsStore,
     private readonly learningLog?: LearningLog,
     private readonly deploymentUpdater?: DeploymentUpdater,
-    private readonly xIntegrationTester?: XIntegrationTester
+    private readonly xIntegrationTester?: XIntegrationTester,
+    private readonly incidentVotes?: IncidentVoteStore
   ) {}
 
   setPendingIncidentAdminHandlers(
@@ -128,6 +136,11 @@ export class DashboardServer {
       try {
         const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
         if (await this.handleAccountRoutes(request, response, url)) return;
+        const voteRoute = /^\/api\/incidents\/([0-9a-f-]{36})\/vote$/i.exec(url.pathname);
+        if (voteRoute && request.method === 'POST') {
+          await this.handleIncidentVote(request, response, voteRoute[1]!);
+          return;
+        }
         if (request.method !== 'GET' && request.method !== 'HEAD') {
           json(response, 405, { error: 'Method not allowed' });
           return;
@@ -200,13 +213,21 @@ export class DashboardServer {
           return;
         }
         if (url.pathname === '/api/incidents') {
-          json(response, 200, { incidents: this.store.search(url.searchParams.get('q') ?? '', selectedBoroughs(url.searchParams)).slice(0, 100) });
+          const deviceId = validVoteDeviceId(url.searchParams.get('deviceId'));
+          const incidents = this.store.search(url.searchParams.get('q') ?? '', selectedBoroughs(url.searchParams)).slice(0, 100)
+            .map((incident) => ({ ...incident, votes: this.incidentVotes?.getSummary(incident.id, deviceId) ?? { up: 0, down: 0, myVote: null } }));
+          json(response, 200, { incidents });
           return;
         }
         const incidentApiMatch = /^\/api\/incidents\/([0-9a-f-]{36})$/i.exec(url.pathname);
         if (incidentApiMatch) {
           const incident = this.store.getIncident(incidentApiMatch[1]!);
-          json(response, incident ? 200 : 404, incident ? { incident } : { error: 'Incident not found' });
+          const enriched = incident ? {
+            ...incident,
+            votes: this.incidentVotes?.getSummary(incident.id, validVoteDeviceId(url.searchParams.get('deviceId')))
+              ?? { up: 0, down: 0, myVote: null }
+          } : undefined;
+          json(response, incident ? 200 : 404, incident ? { incident: enriched } : { error: 'Incident not found' });
           return;
         }
         if (url.pathname === '/api/map-incidents') {
@@ -824,6 +845,51 @@ export class DashboardServer {
   private clearSessionCookie(response: ServerResponse): void {
     const secure = this.authConfig?.publicUrl.startsWith('https://') ? '; Secure' : '';
     response.setHeader('Set-Cookie', `${sessionCookie}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`);
+  }
+
+  private async handleIncidentVote(request: IncomingMessage, response: ServerResponse, incidentId: string): Promise<void> {
+    if (!this.hasSameOrigin(request)) {
+      json(response, 403, { error: 'Request origin was not accepted.' });
+      return;
+    }
+    if (!this.incidentVotes) {
+      json(response, 503, { error: 'Incident voting is not configured.' });
+      return;
+    }
+    if (!this.takeRateLimit(request, 'incident-vote', 20, 60_000)) {
+      json(response, 429, { error: 'Voting is temporarily rate-limited. Try again shortly.' });
+      return;
+    }
+    try {
+      const body = await readJsonBody(request);
+      const deviceId = validVoteDeviceId(body.deviceId);
+      if (!deviceId || !isIncidentVote(body.vote)) {
+        json(response, 400, { error: 'A valid device ID and up/down vote are required.' });
+        return;
+      }
+      const incident = this.store.getIncident(incidentId);
+      if (!incident) {
+        json(response, 404, { error: 'Incident not found.' });
+        return;
+      }
+      const result = this.incidentVotes.castVote(incident, deviceId, body.vote);
+      if (result.accepted) {
+        this.learningLog?.recordIncidentFeedback({
+          incidentId: incident.id,
+          vote: body.vote,
+          agency: incident.agency,
+          borough: incident.borough,
+          incidentType: incident.incidentType,
+          category: incident.category,
+          publicScore: incident.newsworthinessScore,
+          buffScore: incident.buffInterestScore,
+          newsMediaScore: incident.assignmentDeskScore
+        });
+      }
+      json(response, 200, { ...result, message: result.accepted ? 'Vote recorded.' : 'This device has already voted on this incident.' });
+    } catch (error) {
+      json(response, 400, { error: error instanceof Error ? error.message : 'Could not record vote.' });
+    }
   }
 
   private hasSameOrigin(request: IncomingMessage): boolean {

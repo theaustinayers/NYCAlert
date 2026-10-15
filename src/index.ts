@@ -19,12 +19,14 @@ import { LearningLog } from './services/learning-log.js';
 import { DeploymentUpdater } from './services/deployment-updater.js';
 import { XApiIncidentPublisher } from './providers/x-post.js';
 import { SourceCallLedger } from './services/source-call-ledger.js';
+import { IncidentVoteStore } from './services/incident-vote-store.js';
 
 const store = new SubscriptionStore(config.dataDir);
 const accountStore = new AccountStore(config.dataDir);
 const siteSettingsStore = new SiteSettingsStore(config.dataDir);
 const learningLog = new LearningLog(config.dataDir, config.aiLearningLogEnabled, config.aiLearningLogRetentionDays, config.aiLearningLogMaxEvents);
 const sourceCallLedger = new SourceCallLedger(config.dataDir);
+const incidentVoteStore = new IncidentVoteStore(config.dataDir);
 const deploymentUpdater = new DeploymentUpdater(config.dataDir);
 const xPublisher = config.xUserAccessToken
   ? new XApiIncidentPublisher({ kind: 'oauth2-user', userAccessToken: config.xUserAccessToken })
@@ -49,7 +51,7 @@ const dashboard = new DashboardServer(dashboardStore, config.dashboardPort, conf
   smtpUsername: config.smtpUsername,
   smtpPassword: config.smtpPassword,
   smtpFrom: config.smtpFrom
-}, siteSettingsStore, learningLog, deploymentUpdater, xPublisher);
+}, siteSettingsStore, learningLog, deploymentUpdater, xPublisher, incidentVoteStore);
 const incidentGeocoder = new NominatimIncidentGeocoder(config.mapGeocoderContact);
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 let feedPoller: CallFeedPoller | undefined;
@@ -58,6 +60,7 @@ let staticStreamMonitor: BroadcastifyStaticStreamMonitor | undefined;
 await store.init();
 await learningLog.init();
 await sourceCallLedger.init();
+await incidentVoteStore.init();
 await dashboard.start();
 
 if (!config.xAutoPostEnabled) {
@@ -181,6 +184,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     logger.info({ signal }, 'Shutting down');
     void learningLog.flush();
     sourceCallLedger.close();
+    incidentVoteStore.close();
     feedPoller?.stop();
     void staticStreamMonitor?.stop();
     void dashboard.stop();

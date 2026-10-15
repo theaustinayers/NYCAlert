@@ -1,4 +1,5 @@
 import { appendFile, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { Agency, Borough } from '../domain/subscriptions.js';
 import type { FdnyTransmissionAnalysis } from '../domain/fdny-radio.js';
@@ -10,6 +11,7 @@ export type LearningWorkflowStage =
   | 'transcription-error'
   | 'transcription-ignored'
   | 'source-duplicate-suppressed'
+  | 'incident-feedback'
   | 'repeat-suppressed'
   | 'triage'
   | 'triage-error'
@@ -74,6 +76,7 @@ export interface LearningEvent {
   correlation?: { candidateCount: number; incidentId?: string; pendingMatchCount?: number };
   disposition?: string;
   incidentId?: string;
+  feedbackVote?: 'up' | 'down';
   error?: { name: string; message: string };
 }
 
@@ -155,6 +158,36 @@ export class LearningLog {
       if (this.recordCount % 100 === 0) await this.pruneExpired();
     });
     this.writeQueue = task.catch(() => undefined);
+  }
+
+  recordIncidentFeedback(input: {
+    incidentId: string;
+    vote: 'up' | 'down';
+    agency: Agency;
+    borough: Borough | 'Citywide';
+    incidentType?: string;
+    category: string;
+    publicScore: number;
+    buffScore: number;
+    newsMediaScore: number;
+  }): void {
+    const now = new Date().toISOString();
+    this.record({
+      eventId: randomUUID(),
+      callId: 'incident-feedback',
+      occurredAt: now,
+      loggedAt: now,
+      stage: 'incident-feedback',
+      workflowPath: ['incident-feedback'],
+      agency: input.agency,
+      feedBorough: input.borough,
+      incidentId: input.incidentId,
+      feedbackVote: input.vote,
+      incidentType: input.incidentType,
+      category: input.category,
+      scores: { public: input.publicScore, buff: input.buffScore, newsMedia: input.newsMediaScore },
+      disposition: 'anonymous-device-vote'
+    });
   }
 
   async flush(): Promise<void> {

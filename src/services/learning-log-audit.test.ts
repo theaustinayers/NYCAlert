@@ -79,4 +79,16 @@ describe('analyzeLearningLog', () => {
     assert.equal(serialized.includes('private-call'), false);
     assert.equal(serialized.includes('incident-one'), false);
   });
+
+  it('aggregates incident feedback without adding votes to radio event totals', async () => {
+    const report = await analyzeLearningLog([
+      JSON.stringify({ eventId: 'private-feedback-event', stage: 'incident-feedback', feedbackVote: 'up', incidentType: 'fire' }),
+      JSON.stringify({ eventId: 'private-feedback-event-2', stage: 'incident-feedback', feedbackVote: 'down', incidentType: 'medical' })
+    ]);
+
+    assert.equal(report.feedback.records, 2);
+    assert.deepEqual(report.feedback.votes, { up: 1, down: 1 });
+    assert.equal(report.events.distinctEventIds, 0);
+    assert.equal(JSON.stringify(report).includes('private-feedback-event'), false);
+  });
 });
