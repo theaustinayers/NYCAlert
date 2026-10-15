@@ -9,7 +9,7 @@ import type { IncidentPostPublisher } from '../providers/x-post.js';
 import type { CallAnalysisProvider } from '../providers/ai.js';
 import type { MapCoordinates } from '../providers/map-geocoder.js';
 import { logger } from '../logger.js';
-import { extractActingAsAssignments, extractBoxNumbers, extractUnitIds, isSameIncident, type IncidentIdentity } from './incident-correlation.js';
+import { extractActingAsAssignments, extractBoxNumbers, extractUnitIds, fdnyFollowupEvidence, isSameIncident, type IncidentIdentity } from './incident-correlation.js';
 import { RecentRepeatDetector } from './repeat-detection.js';
 import type { SubscriptionStore } from '../storage/subscription-store.js';
 import type { DashboardStore, DashboardIncident } from './dashboard-store.js';
@@ -24,7 +24,9 @@ const nonSpeechPlaceholders = new Set([
 ]);
 
 function isNonSpeechTranscript(transcript: string): boolean {
-  const normalized = transcript.normalize('NFKC').toLowerCase()
+  // Remove only known non-speech annotations, never arbitrary bracketed words or mixed speech.
+  const withoutAnnotations = transcript.replace(/[\[({]\s*(?:silence|blank[_ -]audio|inaudible|unintelligible|no speech|crickets? chirping|static|radio noise|indistinct radio chatter|background noise)\s*[\])}]/gi, ' ');
+  const normalized = withoutAnnotations.normalize('NFKC').toLowerCase()
     .replace(/[_-]+/g, ' ')
     .replace(/[\[\](){}"'`]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -381,6 +383,7 @@ export class CallProcessor {
       ...(coordinates ? { latitude: coordinates.latitude, longitude: coordinates.longitude } : {}),
       unitIds,
       boxNumbers,
+      ...fdnyFollowupEvidence(transcript, call.agency),
       occurredAt: call.occurredAt.getTime()
     };
     this.pruneTrackedIncidents(Date.now());
@@ -410,6 +413,7 @@ export class CallProcessor {
         summary: triage.summary,
         occurredAt: call.occurredAt,
         location: triage.location,
+        isExplicitLocationCorrection: identity.isExplicitLocationCorrection,
         incidentType: triage.incidentType,
         locationPrecision: boroughOnlyLocation ? 'borough' : coordinates?.precision ?? trace.geocode?.precision ?? 'unresolved',
         ...(coordinates ? { latitude: coordinates.latitude, longitude: coordinates.longitude } : {}),
@@ -465,7 +469,7 @@ export class CallProcessor {
       }
       logger.info({ callId: call.id, pendingCount: this.pendingIncidents.length }, 'Cross-borough location could not be verified; withholding new public call');
       this.recordLearning(call, trace, 'incident-withheld', {
-        disposition: matchingIncident ? 'existing-incident-updated-location-conflict-unverified' : 'explicit-borough-conflict-unverified',
+        disposition: 'explicit-borough-conflict-unverified',
         location: triage.location
       });
       return 'processed';
@@ -547,10 +551,15 @@ export class CallProcessor {
     if (matchingPending) {
       const pendingAt = new Date(matchingPending.identity.occurredAt);
       const attached = await this.dashboard.updateIncident(incident.id, {
+        agency: matchingPending.identity.agency,
         headline: triage.headline,
         summary: `Earlier unlocated radio report (${pendingAt.toISOString()}): ${matchingPending.summary}`,
         occurredAt: call.occurredAt,
         location: triage.location,
+        ...(identity.isExplicitLocationCorrection ? {
+          isExplicitLocationCorrection: true,
+          previousLocation: matchingPending.identity.location
+        } : {}),
         incidentType: triage.incidentType,
         ...(coordinates ? { latitude: coordinates.latitude, longitude: coordinates.longitude } : {}),
         unitIds: matchingPending.identity.unitIds,

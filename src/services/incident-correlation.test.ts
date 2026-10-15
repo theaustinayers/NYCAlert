@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { extractActingAsAssignments, extractUnitIds, isSameIncident } from './incident-correlation.js';
+import { extractActingAsAssignments, extractUnitIds, fdnyFollowupEvidence, isSameIncident } from './incident-correlation.js';
 
 describe('extractUnitIds', () => {
   it('normalizes explicitly spoken fire/rescue unit identifiers', () => {
@@ -29,6 +29,38 @@ describe('extractUnitIds', () => {
 });
 
 describe('isSameIncident', () => {
+  it('uses a local FDNY Box for operational follow-ups after ten minutes, never bare cross-borough Box reuse', () => {
+    const initial = { agency: 'FDNY' as const, borough: 'Queens' as const, incidentType: 'fire' as const,
+      location: '123-45 Example Avenue', boxNumbers: ['BOX 4001'], unitIds: [], occurredAt: 1_000_000 };
+    const update = { ...initial, location: undefined, incidentType: 'other' as const,
+      ...fdnyFollowupEvidence('Box 4001, all hands, primary searches negative, probably will hold.', 'FDNY'),
+      occurredAt: initial.occurredAt + 12 * 60_000 };
+    assert.equal(isSameIncident(initial, update), true);
+    assert.equal(isSameIncident(initial, { ...update, occurredAt: initial.occurredAt + 29 * 60_000 }), true);
+    assert.equal(isSameIncident(initial, { ...update, occurredAt: initial.occurredAt + 31 * 60_000 }), false);
+    assert.equal(isSameIncident(initial, { ...update, isOperationalUpdate: false }), false);
+    assert.equal(isSameIncident(initial, { ...update, borough: 'Bronx' }), false);
+    assert.equal(isSameIncident(initial, { ...update, agency: 'NYPD' }), false);
+    assert.equal(isSameIncident(initial, { ...update, incidentType: 'vehicle' }), false);
+    assert.equal(isSameIncident(initial, { ...update, location: '123-47 Example Avenue' }), false);
+    assert.equal(isSameIncident(initial, { ...update, borough: 'Bronx', occurredAt: initial.occurredAt + 60_000, incidentType: 'fire' }), false);
+  });
+
+  it('accepts an explicit FDNY address correction only with a same-borough Box, compatible type and narrow time window', () => {
+    const initial = { agency: 'FDNY' as const, borough: 'Queens' as const, incidentType: 'fire' as const,
+      location: '121-11 Example Street', boxNumbers: ['BOX 4001'], unitIds: [], occurredAt: 1_000_000 };
+    const correction = { ...initial, location: '123-45 Example Avenue',
+      ...fdnyFollowupEvidence('Box 4001, corrected address 123-45 Example Avenue.', 'FDNY'),
+      occurredAt: initial.occurredAt + 6 * 60_000 };
+    assert.equal(isSameIncident(initial, correction), true);
+    assert.equal(isSameIncident(initial, { ...correction, isExplicitLocationCorrection: false }), false);
+    assert.equal(isSameIncident(initial, { ...correction, boxNumbers: ['BOX 4002'] }), false);
+    assert.equal(isSameIncident(initial, { ...correction, borough: 'Bronx' }), false);
+    assert.equal(isSameIncident(initial, { ...correction, incidentType: 'vehicle' }), false);
+    assert.equal(isSameIncident(initial, { ...correction, occurredAt: initial.occurredAt + 11 * 60_000 }), false);
+    assert.equal(isSameIncident({ ...initial, latitude: 40.72, longitude: -73.81 }, { ...correction, latitude: 40.85, longitude: -73.9 }), false);
+    assert.deepEqual(fdnyFollowupEvidence('corrected address', 'NYPD'), {});
+  });
   const initial = {
     agency: 'FDNY' as const,
     borough: 'Queens' as const,

@@ -15,7 +15,19 @@ export interface IncidentIdentity {
   longitude?: number;
   unitIds: string[];
   boxNumbers?: string[];
+  /** Literal continuation evidence from the source transcript, not severity inferred from a code. */
+  isOperationalUpdate?: boolean;
+  /** Explicit address-correction wording in the transcript; never guessed from geocoding. */
+  isExplicitLocationCorrection?: boolean;
   occurredAt: number;
+}
+
+export function fdnyFollowupEvidence(transcript: string, agency: Agency): Pick<IncidentIdentity, 'isOperationalUpdate' | 'isExplicitLocationCorrection'> {
+  if (agency !== 'FDNY') return {};
+  return {
+    isOperationalUpdate: /\b(?:all[ -]hands|working fire|under control|probably will hold|checking for extension|fire (?:is )?extinguished|knockdown|primary search(?:es)?|secondary search(?:es)?|lines? (?:operating|stretched)|defensive operat(?:ion|ions)|no fire found)\b/i.test(transcript),
+    isExplicitLocationCorrection: /\b(?:corrected address|address correction|correct address (?:is|to)|correction[,.:;]?\s+(?:the\s+)?address)\b/i.test(transcript)
+  };
 }
 
 const unitClasses: Record<string, string> = {
@@ -312,16 +324,31 @@ export function isSameIncident(existing: IncidentIdentity, incoming: IncidentIde
   const age = incoming.occurredAt - existing.occurredAt;
   if (age < 0 || age > maxAgeMs) return false;
   if (existing.agency !== incoming.agency) return sameCrossAgencyIncident(existing, incoming, age);
-  if (explicitAddressesConflict(existing.location, incoming.location)
-    || explicitBoroughsConflict(existing.location, incoming.location)) return false;
   const sameBorough = existing.borough === incoming.borough;
   const unitMatch = hasSharedUnit(existing.unitIds, incoming.unitIds);
   const sharedBox = Boolean(existing.boxNumbers?.some((box) => incoming.boxNumbers?.includes(box)));
-  const locationMatch = sameLocation(existing, incoming);
+  if (explicitBoroughsConflict(existing.location, incoming.location)) return false;
   const coordsConflict = coordinatesConflict(existing, incoming, 500);
+  // Address corrections are a separate narrow route. A Box number alone never overrides
+  // a conflicting address, borough, precise coordinates, or a different concrete event type.
+  const correctionMatch = existing.agency === 'FDNY' && sameBorough && existing.borough !== 'Citywide'
+    && sharedBox && incoming.isExplicitLocationCorrection === true && age <= 10 * 60_000
+    && Boolean(explicitStreetAddress(incoming.location))
+    && compatibleType(existing.incidentType, incoming.incidentType) && !coordsConflict;
+  if (correctionMatch) return true;
+  if (explicitAddressesConflict(existing.location, incoming.location)) return false;
+  const locationMatch = sameLocation(existing, incoming);
   const exactStreetAddress = sameExplicitStreetAddress(existing.location, incoming.location);
   const crossBoroughLocationMatch = !coordsConflict && (sameCoordinates(existing, incoming) || sameExplicitAddress(existing, incoming) || exactStreetAddress);
-  if (!coordsConflict && sharedBox && age <= 10 * 60 * 1000 && compatibleType(existing.incidentType, incoming.incidentType)) return true;
+  const incomingHasNoSpecificLocation = !incoming.location?.trim()
+    || /^(?:Manhattan|Bronx|Queens|Brooklyn|Staten\s+Island|Citywide)[.,\s]*$/i.test(incoming.location);
+  if (!coordsConflict && sharedBox && sameBorough && existing.borough !== 'Citywide'
+    && age <= 10 * 60_000 && compatibleType(existing.incidentType, incoming.incidentType)) return true;
+  // A scoped operational report can continue a same-borough FDNY Box incident for the
+  // normal 30-minute horizon even without an address. The processor still requires uniqueness.
+  if (!coordsConflict && existing.agency === 'FDNY' && sharedBox && sameBorough
+    && existing.borough !== 'Citywide' && incomingHasNoSpecificLocation
+    && incoming.isOperationalUpdate === true && nonConflictingType(existing.incidentType, incoming.incidentType)) return true;
   // Exact explicit address is stronger than a feed-borough label. Permit an unspecified/other
   // follow-up type (e.g. “fire under control”), but never merge conflicting concrete types.
   if (!coordsConflict && exactStreetAddress && nonConflictingType(existing.incidentType, incoming.incidentType)) return true;

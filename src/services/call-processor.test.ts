@@ -11,11 +11,79 @@ import { CallProcessor, roleMentionOptions } from './call-processor.js';
 import { SourceCallLedger } from './source-call-ledger.js';
 import { LearningLog } from './learning-log.js';
 import type { IncidentPostPublisher, XIncidentPost } from '../providers/x-post.js';
+import type { CallTriage } from '../domain/triage.js';
 
 const testDirectory = await mkdtemp(join(tmpdir(), 'nyc-call-processor-'));
 after(async () => rm(testDirectory, { recursive: true, force: true }));
 
 describe('CallProcessor', () => {
+  it('replays a synthetic Series 5 Box sequence: pending address, explicit correction, late operational report, scoped negative', async () => {
+    const triages: CallTriage[] = [
+      { shouldAlert: true, category: 'newsworthy', headline: 'Reported Dwelling Fire', summary: 'Reported dwelling fire at initial address.', location: '121-11 Example Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 4 },
+      { shouldAlert: true, category: 'newsworthy', headline: 'All Hands Working Fire', summary: 'Corrected address reported; all hands working.', location: '123-45 Example Avenue', incidentType: 'fire', confidence: 0.95, newsworthinessScore: 4 },
+      { shouldAlert: true, category: 'newsworthy', headline: 'Probably Will Hold', summary: 'Primary searches negative; one line operating, probably will hold.', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 4 },
+      { shouldAlert: false, category: 'newsworthy', headline: 'No Fire Found', summary: 'No fire found in the garage checked by a unit.', incidentType: 'other', confidence: 0.85, newsworthinessScore: 1 }
+    ];
+    let index = 0;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript supplied'); },
+      async triage() { return triages[index++]!; }
+    };
+    const dashboard = new DashboardStore(false);
+    const processor = new CallProcessor({} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard,
+      false, 0.78, 4, { async geocode(location) {
+        return location === '123-45 Example Avenue' ? { latitude: 40.72, longitude: -73.81, precision: 'street_address' as const } : undefined;
+      } });
+    const base = Date.now() - 20 * 60_000;
+    const texts = [
+      'Box 4001, reported dwelling fire at 121-11 Example Street.',
+      'Box 4001, corrected address 123-45 Example Avenue, all hands working fire.',
+      'Box 4001, primary searches negative, one line operating, probably will hold.',
+      'Box 4001, no fire found in the garage checked by this unit.'
+    ];
+    const offsets = [0, 6, 18, 19];
+    for (let step = 0; step < texts.length; step += 1) {
+      await processor.process({ id: `series5-synthetic-${step}`, agency: 'FDNY', borough: 'Queens',
+        occurredAt: new Date(base + offsets[step]! * 60_000), transcript: texts[step]! });
+      if (step === 0) assert.equal(processor.listPendingIncidents().length, 1);
+    }
+    const incidents = dashboard.search();
+    assert.equal(incidents.length, 1);
+    const incident = incidents[0]!;
+    assert.equal(incident.location, '123-45 Example Avenue');
+    assert.equal(incident.locationPrecision, 'street_address');
+    assert.equal(incident.latitude, 40.72);
+    assert.equal(incident.updateCount, 3);
+    assert.match(incident.title, /^All Hands Working Fire/);
+    assert.match(incident.summary, /all hands working/);
+    assert.equal(incident.updates[0]?.previousLocation, '121-11 Example Street');
+    assert.equal(incident.updates[0]?.isExplicitLocationCorrection, true);
+    assert.match(incident.updates[2]?.summary ?? '', /garage/);
+    assert.equal(processor.listPendingIncidents().length, 0);
+  });
+
+  it('does not attach an addressless Box update when two active same-Box incidents are plausible', async () => {
+    let index = 0;
+    const triages: CallTriage[] = [
+      { shouldAlert: true, category: 'newsworthy', headline: 'Reported Fire', summary: 'Fire reported at first address.', location: '100 Example Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 4 },
+      { shouldAlert: true, category: 'newsworthy', headline: 'Reported Fire', summary: 'Fire reported at a different address.', location: '200 Other Avenue', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 4 },
+      { shouldAlert: false, category: 'routine', headline: 'Probably Will Hold', summary: 'One line operating; probably will hold.', incidentType: 'other', confidence: 0.9, newsworthinessScore: 1 }
+    ];
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript supplied'); },
+      async triage() { return triages[index++]!; }
+    };
+    const dashboard = new DashboardStore(false);
+    const processor = new CallProcessor({} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard);
+    const base = Date.now() - 15 * 60_000;
+    const transcripts = ['Box 4001, fire at 100 Example Street.', 'Box 4001, fire at 200 Other Avenue.', 'Box 4001, one line operating; probably will hold.'];
+    for (const [step, transcript] of transcripts.entries()) {
+      await processor.process({ id: `ambiguous-box-${step}`, agency: 'FDNY', borough: 'Queens', occurredAt: new Date(base + [0, 1, 14][step]! * 60_000), transcript });
+    }
+    assert.equal(dashboard.search().length, 2);
+    assert.equal(dashboard.search().every((incident) => incident.updateCount === 0), true);
+  });
+
   it('transcribes an audio file, triages it and publishes a qualifying incident', async () => {
     const audioPath = join(testDirectory, 'call.mp3');
     await writeFile(audioPath, Buffer.from('sample audio'));
@@ -889,7 +957,10 @@ describe('CallProcessor', () => {
   it('skips silence and Whisper placeholder transcripts without triaging or archiving them', async () => {
     const audioPath = join(testDirectory, 'silence.mp3');
     await writeFile(audioPath, Buffer.from('silent audio'));
-    const transcripts = ['[ Silence ]', '[BLANK_AUDIO]', 'No relevant information provided in the transcript.'];
+    const transcripts = ['[ Silence ]', '[BLANK_AUDIO]', 'No relevant information provided in the transcript.',
+      '[ Silence ] [ Silence ] [ Silence ]', '(crickets chirping)\n(crickets chirping)',
+      '[static] (indistinct radio chatter) [radio noise]', '[Unintelligible]'];
+    const transcriptCount = transcripts.length;
     let triageCalls = 0;
     const analysis: CallAnalysisProvider = {
       async transcribe() { return transcripts.shift() ?? ''; },
@@ -901,7 +972,7 @@ describe('CallProcessor', () => {
     const dashboard = new DashboardStore(false);
     const processor = new CallProcessor({} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard);
 
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < transcriptCount; index += 1) {
       assert.equal(await processor.process({
         id: `silent-call-${index}`,
         borough: 'Citywide',
@@ -914,5 +985,21 @@ describe('CallProcessor', () => {
     assert.equal(triageCalls, 0);
     assert.equal(dashboard.search().length, 0);
     assert.equal(dashboard.listLiveCalls().length, 0);
+  });
+
+  it('does not discard intelligible speech mixed with noise markers or short radio codes', async () => {
+    let triageCalls = 0;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript supplied'); },
+      async triage() {
+        triageCalls += 1;
+        return { shouldAlert: false, category: 'routine', summary: 'Radio communication.', confidence: 0.5, newsworthinessScore: 1 };
+      }
+    };
+    const processor = new CallProcessor({} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, new DashboardStore(false));
+    for (const [index, transcript] of ['[static] Car 1234 requesting assistance.', '(silence) 10-4.', '[Unit requesting help]'].entries()) {
+      assert.equal(await processor.process({ id: `mixed-noise-${index}`, agency: 'NYPD', borough: 'Citywide', occurredAt: new Date(), transcript }), 'processed');
+    }
+    assert.equal(triageCalls, 3);
   });
 });

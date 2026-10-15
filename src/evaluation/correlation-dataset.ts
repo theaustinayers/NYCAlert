@@ -8,7 +8,7 @@ const agencies = new Set<Agency>(['FDNY', 'NYPD']);
 const boroughs = new Set<Borough | 'Citywide'>(['Manhattan', 'Bronx', 'Queens', 'Brooklyn', 'Staten Island', 'Citywide']);
 const incidentTypes = new Set<IncidentType>(['medical', 'vehicle', 'fire', 'police', 'other']);
 const allowedCaseKeys = new Set(['id', 'labelStatus', 'expectedSameIncident', 'existing', 'incoming']);
-const allowedIdentityKeys = new Set(['agency', 'borough', 'incidentType', 'eventDescription', 'location', 'latitude', 'longitude', 'unitIds', 'boxNumbers', 'occurredAt']);
+const allowedIdentityKeys = new Set(['agency', 'borough', 'incidentType', 'eventDescription', 'location', 'latitude', 'longitude', 'unitIds', 'boxNumbers', 'occurredAt', 'isOperationalUpdate', 'isExplicitLocationCorrection']);
 
 export async function loadReviewedCorrelationDataset(path: string): Promise<CorrelationEvaluationCase[]> {
   const contents = await readFile(path, 'utf8');
@@ -55,6 +55,9 @@ function parseIdentity(value: unknown, line: number): IncidentIdentity {
   for (const key of ['latitude', 'longitude'] as const) {
     if (value[key] !== undefined && (typeof value[key] !== 'number' || !Number.isFinite(value[key]))) throw new Error(`Dataset line ${line} has invalid ${key}.`);
   }
+  for (const key of ['isOperationalUpdate', 'isExplicitLocationCorrection'] as const) {
+    if (value[key] !== undefined && typeof value[key] !== 'boolean') throw new Error(`Dataset line ${line} has invalid ${key}.`);
+  }
   return {
     agency: value.agency as Agency,
     borough: value.borough as Borough | 'Citywide',
@@ -65,6 +68,8 @@ function parseIdentity(value: unknown, line: number): IncidentIdentity {
     ...(typeof value.longitude === 'number' ? { longitude: value.longitude } : {}),
     unitIds: value.unitIds as string[],
     ...(Array.isArray(value.boxNumbers) ? { boxNumbers: value.boxNumbers as string[] } : {}),
+    ...(typeof value.isOperationalUpdate === 'boolean' ? { isOperationalUpdate: value.isOperationalUpdate } : {}),
+    ...(typeof value.isExplicitLocationCorrection === 'boolean' ? { isExplicitLocationCorrection: value.isExplicitLocationCorrection } : {}),
     occurredAt: value.occurredAt as number
   };
 }

@@ -20,6 +20,32 @@ const input = {
 };
 
 describe('DashboardStore', () => {
+  it('retains old and corrected addresses and never replaces a precise corrected pin with a borough-only update', async () => {
+    const store = new DashboardStore(false);
+    const incident = await store.publish({ ...input, headline: 'All Hands Working Fire', location: '100 Example Street',
+      latitude: 40.72, longitude: -73.81, locationPrecision: 'street_address' });
+    const corrected = await store.updateIncident(incident.id, {
+      agency: 'FDNY', summary: 'Corrected address reported.', occurredAt: new Date('2026-01-01T12:03:00Z'),
+      location: '200 Example Avenue', isExplicitLocationCorrection: true,
+      latitude: 40.721, longitude: -73.811, locationPrecision: 'street_address',
+      category: 'newsworthy', confidence: 0.9, newsworthinessScore: 4, unitIds: []
+    });
+    assert.equal(corrected?.location, '200 Example Avenue');
+    assert.equal(corrected?.updates[0]?.previousLocation, '100 Example Street');
+    assert.equal(corrected?.updates[0]?.isExplicitLocationCorrection, true);
+    const updated = await store.updateIncident(incident.id, {
+      summary: 'No fire found in the checked garage.', headline: 'No Fire Found',
+      occurredAt: new Date('2026-01-01T12:15:00Z'), location: 'Manhattan', locationPrecision: 'borough',
+      category: 'newsworthy', confidence: 0.9, newsworthinessScore: 1, unitIds: []
+    });
+    assert.equal(updated?.location, '200 Example Avenue');
+    assert.equal(updated?.latitude, 40.721);
+    assert.equal(updated?.locationPrecision, 'street_address');
+    assert.match(updated?.title ?? '', /^All Hands Working Fire/);
+    assert.equal(updated?.summary, incident.summary);
+    assert.equal(updated?.updates[1]?.location, 'Manhattan');
+    assert.match(updated?.updates[1]?.summary ?? '', /garage/);
+  });
   it('publishes/searches curated incidents without storing audio by default', async () => {
     const store = new DashboardStore(false);
     const incident = await store.publish({ ...input, audioPath: join(testDirectory, 'not-allowed.mp3') });

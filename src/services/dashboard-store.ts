@@ -50,7 +50,7 @@ export interface DashboardIncident {
   unitAssignments: RadioUnitAssignment[];
   boxNumbers: string[];
   updateCount: number;
-  updates: Array<{ agency: Agency; headline?: string; summary: string; occurredAt: string; unitIds: string[]; unitAssignments: RadioUnitAssignment[]; boxNumbers: string[] }>;
+  updates: Array<{ agency: Agency; headline?: string; summary: string; occurredAt: string; unitIds: string[]; unitAssignments: RadioUnitAssignment[]; boxNumbers: string[]; location?: string; previousLocation?: string; isExplicitLocationCorrection?: boolean }>;
   confidence: number;
   newsworthinessScore: number;
   buffInterestScore: number;
@@ -67,6 +67,9 @@ export interface DashboardIncidentUpdateInput {
   occurredAt: Date;
   agency?: Agency;
   location?: string;
+  isExplicitLocationCorrection?: boolean;
+  /** Superseded report when a corrected located call absorbs an earlier pending report. */
+  previousLocation?: string;
   incidentType?: IncidentType;
   latitude?: number;
   longitude?: number;
@@ -390,23 +393,28 @@ export class DashboardStore {
     const oldHeadlineIsMoreDescriptive = !isGenericIncidentHeadline(oldHeadline)
       && oldHeadline.split(/\s+/).length > incomingHeadline.split(/\s+/).length;
     const preserveExistingIncidentHeadline = input.category === 'routine' && !isGenericIncidentHeadline(oldHeadline);
-    const headline = (preserveExistingIncidentHeadline || !input.headline || isGenericIncidentHeadline(input.headline) || oldHeadlineIsMoreDescriptive)
+    const scopedNegativeFinding = /\bno (?:fire|smoke) found\b/i.test(input.headline ?? '')
+      && input.newsworthinessScore < current.newsworthinessScore;
+    const headline = (preserveExistingIncidentHeadline || scopedNegativeFinding || !input.headline || isGenericIncidentHeadline(input.headline) || oldHeadlineIsMoreDescriptive)
       ? oldHeadline
       : incomingHeadline;
     const hasMapMarker = isValidCoordinates(input.latitude, input.longitude) && canShowMapMarker(input.locationPrecision);
-    const locationChanged = input.location !== undefined && input.location !== current.location;
+    const acceptLocation = Boolean(input.location && (input.isExplicitLocationCorrection || hasMapMarker || !current.location
+      || (!canShowMapMarker(current.locationPrecision) && input.locationPrecision !== 'borough')));
+    const nextLocation = acceptLocation ? input.location : current.location;
+    const locationChanged = nextLocation !== current.location;
     const updated: DashboardIncident = {
       ...current,
       agencies: [...new Set([...current.agencies, input.agency ?? current.agency])],
       title: formatIncidentTitle(
         headline,
-        input.location ?? current.location,
+        nextLocation,
         current.agency,
         current.borough,
         nextCategory
       ),
       updatedAt: input.occurredAt.toISOString(),
-      ...(input.location ? { location: input.location.slice(0, 180) } : {}),
+      ...(acceptLocation ? { location: input.location!.slice(0, 180) } : {}),
       ...(input.incidentType && input.incidentType !== 'other' ? { incidentType: input.incidentType } : {}),
       ...(hasMapMarker ? { latitude: input.latitude, longitude: input.longitude } : locationChanged ? { latitude: undefined, longitude: undefined } : {}),
       locationPrecision: hasMapMarker ? input.locationPrecision! : locationChanged ? input.locationPrecision ?? 'unresolved' : current.locationPrecision,
@@ -419,6 +427,11 @@ export class DashboardStore {
         ...(input.headline && !isGenericIncidentHeadline(input.headline) ? { headline: normalizeIncidentHeadline(input.headline, input.category) } : {}),
         summary: input.summary.slice(0, 700),
         occurredAt: input.occurredAt.toISOString(),
+        ...(input.location ? { location: input.location.slice(0, 180) } : {}),
+        ...(input.isExplicitLocationCorrection && (locationChanged || input.previousLocation) ? {
+          isExplicitLocationCorrection: true,
+          ...((input.previousLocation ?? current.location) ? { previousLocation: (input.previousLocation ?? current.location)!.slice(0, 180) } : {})
+        } : {}),
         unitIds: [...new Set(input.unitIds)].slice(0, 12),
         unitAssignments: normalizeUnitAssignments(input.unitAssignments ?? []),
         boxNumbers: normalizeBoxNumbers(input.boxNumbers ?? [])
