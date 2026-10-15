@@ -308,8 +308,9 @@ function renderUsers() {
   const users = state.users.filter((user) => (!query || `${user.firstName} ${user.lastName} ${user.email} ${user.accountType}`.toLowerCase().includes(query)) && (status === 'all' || user.status === status));
   const table = $('#users-table');
   if (!users.length) { table.innerHTML = '<tr><td colspan="6">No users match these filters.</td></tr>'; return; }
-  table.innerHTML = users.map((user) => `<tr data-user-id="${escapeHtml(user.id)}"><td><div class="admin-user-cell"><strong>${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)}</strong><small>${escapeHtml(user.email)}</small><small>${escapeHtml(user.phone || '')}</small></div></td><td><span class="admin-badge">${escapeHtml(user.accountType)}</span><small>${user.usageCase ? `<br>${escapeHtml(user.usageCase)}` : ''}</small></td><td><span class="admin-badge ${escapeHtml(user.status)}">${escapeHtml(user.status)}</span></td><td>${user.emailVerified ? 'Verified' : 'No'}</td><td>${escapeHtml(formatTime(user.createdAt))}</td><td><div class="admin-row-actions">${user.emailVerified && user.status !== 'approved' ? '<button class="approve" data-user-action="approved">Approve</button>' : ''}${user.status !== 'suspended' ? '<button data-user-action="suspended">Suspend</button>' : '<button data-user-action="pending-approval">Restore</button>'}<button class="danger" data-user-delete="true">Delete</button></div></td></tr>`).join('');
+  table.innerHTML = users.map((user) => `<tr data-user-id="${escapeHtml(user.id)}"><td><div class="admin-user-cell"><strong>${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)}</strong><small>${escapeHtml(user.email)}</small><small>${escapeHtml(user.phone || '')}</small></div></td><td><span class="admin-badge">${escapeHtml(user.accountType)}</span><small>${user.usageCase ? `<br>${escapeHtml(user.usageCase)}` : ''}</small></td><td><span class="admin-badge ${escapeHtml(user.status)}">${escapeHtml(user.status)}</span>${user.webhookAccessSuspended ? '<small><br>Webhook access suspended</small>' : ''}</td><td>${user.emailVerified ? 'Verified' : 'No'}</td><td>${escapeHtml(formatTime(user.createdAt))}</td><td><div class="admin-row-actions">${user.emailVerified && user.status !== 'approved' ? '<button class="approve" data-user-action="approved">Approve</button>' : ''}${user.status !== 'suspended' ? '<button data-user-action="suspended">Suspend</button>' : '<button data-user-action="pending-approval">Restore</button>'}<button data-webhook-access="${user.webhookAccessSuspended ? 'false' : 'true'}">${user.webhookAccessSuspended ? 'Restore hooks' : 'Suspend hooks'}</button><button class="danger" data-user-delete="true">Delete</button></div></td></tr>`).join('');
   $$('[data-user-action]', table).forEach((button) => button.addEventListener('click', () => updateUser(button.closest('[data-user-id]').dataset.userId, button.dataset.userAction)));
+  $$('[data-webhook-access]', table).forEach((button) => button.addEventListener('click', () => updateWebhookAccess(button.closest('[data-user-id]').dataset.userId, button.dataset.webhookAccess === 'true')));
   $$('[data-user-delete]', table).forEach((button) => button.addEventListener('click', () => deleteUser(button.closest('[data-user-id]').dataset.userId)));
 }
 
@@ -318,6 +319,17 @@ async function updateUser(id, status) {
     await api(`/api/admin/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
     showMessage(`User status set to ${status}.`);
     await loadUsers();
+  } catch (error) { showMessage(error.message, true); }
+}
+
+async function updateWebhookAccess(id, suspended) {
+  const verb = suspended ? 'suspend' : 'restore';
+  if (!confirm(`${verb[0].toUpperCase()}${verb.slice(1)} all webhook access for this account?`)) return;
+  try {
+    await api(`/api/admin/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ webhookAccessSuspended: suspended }) });
+    showMessage(`Webhook access ${suspended ? 'suspended' : 'restored'}.`);
+    await loadUsers();
+    await loadWebhooks();
   } catch (error) { showMessage(error.message, true); }
 }
 
@@ -453,8 +465,9 @@ async function loadWebhooks() {
     const data = await api('/api/admin/webhooks');
     state.webhooks = data.webhooks || [];
     const list = $('#webhooks-list');
-    list.innerHTML = state.webhooks.length ? state.webhooks.map((hook) => `<article class="admin-card"><div class="admin-card-meta"><span class="admin-badge">${escapeHtml(hook.accountType)}</span><span>${escapeHtml(hook.accountEmail)}</span><span>${escapeHtml(hook.boroughs === 'all' ? 'All boroughs' : hook.boroughs.join(', '))}</span></div><h3>${escapeHtml(hook.name)}</h3><p class="webhook-url">${escapeHtml(hook.url)}</p><div class="admin-card-actions"><button class="admin-icon-button danger" data-delete-webhook="${escapeHtml(hook.accountId)}:${escapeHtml(hook.id)}">Delete assignment</button></div></article>`).join('') : '<p class="admin-muted">No webhook targets are assigned.</p>';
+    list.innerHTML = state.webhooks.length ? state.webhooks.map((hook) => `<article class="admin-card"><div class="admin-card-meta"><span class="admin-badge">${escapeHtml(hook.accountType)}</span><span>${escapeHtml(hook.accountEmail)}</span><span>${escapeHtml((hook.platform || 'unsupported').toUpperCase())}</span><span>${escapeHtml(hook.boroughs === 'all' ? 'All boroughs' : hook.boroughs.join(', '))}</span><span class="admin-badge ${hook.suspendedAt ? 'suspended' : ''}">${hook.suspendedAt ? 'Suspended' : 'Active'}</span></div><h3>${escapeHtml(hook.name)}</h3><p class="webhook-url">Incoming webhook URL hidden for security.</p><div class="admin-card-actions"><button data-toggle-webhook="${escapeHtml(hook.accountId)}:${escapeHtml(hook.id)}:${hook.suspendedAt ? 'false' : 'true'}">${hook.suspendedAt ? 'Resume delivery' : 'Suspend delivery'}</button><button class="admin-icon-button danger" data-delete-webhook="${escapeHtml(hook.accountId)}:${escapeHtml(hook.id)}">Delete assignment</button></div></article>`).join('') : '<p class="admin-muted">No webhook targets are assigned.</p>';
     $$('[data-delete-webhook]').forEach((button) => button.addEventListener('click', () => deleteWebhook(button.dataset.deleteWebhook)));
+    $$('[data-toggle-webhook]').forEach((button) => button.addEventListener('click', () => toggleWebhook(button.dataset.toggleWebhook)));
   } catch (error) { showMessage(error.message, true); }
 }
 
@@ -467,7 +480,18 @@ async function createWebhook(event) {
   try {
     await api('/api/admin/webhooks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
     form.reset();
-    showMessage('Webhook target stored. Outbound delivery remains disabled.');
+    showMessage('Webhook destination saved. Qualified incident alerts are active.');
+    await loadWebhooks();
+  } catch (error) { showMessage(error.message, true); }
+}
+
+async function toggleWebhook(composite) {
+  const [accountId, webhookId, value] = composite.split(':');
+  const suspended = value === 'true';
+  if (!confirm(`${suspended ? 'Suspend' : 'Resume'} delivery to this webhook?`)) return;
+  try {
+    await api(`/api/admin/webhooks/${encodeURIComponent(accountId)}/${encodeURIComponent(webhookId)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ suspended }) });
+    showMessage(`Webhook delivery ${suspended ? 'suspended' : 'resumed'}.`);
     await loadWebhooks();
   } catch (error) { showMessage(error.message, true); }
 }

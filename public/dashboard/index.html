@@ -12,6 +12,7 @@
   <meta property="og:url" content="https://nycalert.ai/">
   <title>NYC Alert — Public Safety Desk</title>
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/webhooks.css">
   <link rel="stylesheet" href="/live.css">
   <link rel="stylesheet" href="/live-overflow.css">
   <link rel="stylesheet" href="/map.css">
@@ -19,7 +20,7 @@
   <link rel="stylesheet" href="/leaflet.css">
   <link rel="stylesheet" href="/mobile.css">
   <script src="/leaflet.js" defer></script>
-    <script src="/app.js?v=dashboard-20261014-votes1" defer></script>
+    <script src="/app.js?v=dashboard-webhooks-20261015-1" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -32,7 +33,7 @@
       <div class="incident-ticker" id="incident-ticker" role="status" aria-live="polite"><span class="ticker-live-dot"></span><strong id="incident-ticker-label">INCIDENT:</strong><span id="incident-ticker-text">Waiting for recent incidents…</span></div>
       <a class="donate-button" href="https://buymeacoffee.com/nycalert" target="_blank" rel="noopener noreferrer" aria-label="Donate to NYC Alert on Buy Me a Coffee">☕ <span>Donate</span></a>
       <a class="invite-button" id="invite-discord" href="https://discord.gg/gcfCBkMG8C" target="_blank" rel="noopener noreferrer" aria-label="Join Our Discord community">Join Our Discord</a>
-      <div class="account-actions" id="account-actions"><button class="account-button" id="auth-login" type="button">Log in</button><button class="account-button account-button-primary" id="auth-register" type="button">Register</button><span id="signed-in-actions" hidden><span class="account-name" id="account-name"></span><a class="account-button" id="admin-dashboard" href="/admin" hidden>Admin dashboard</a><button class="account-button" id="auth-logout" type="button">Log out</button></span></div>
+      <div class="account-actions" id="account-actions"><button class="account-button" id="auth-login" type="button">Log in</button><button class="account-button account-button-primary" id="auth-register" type="button">Register</button><span id="signed-in-actions" hidden><span class="account-name" id="account-name"></span><button class="account-button" id="account-webhooks" type="button" hidden>Webhooks</button><a class="account-button" id="admin-dashboard" href="/admin" hidden>Admin dashboard</a><button class="account-button" id="auth-logout" type="button">Log out</button></span></div>
       <div class="topbar-right"><span class="system-state"><i></i><span id="system-state">CONNECTING</span></span><span class="top-divider"></span><time id="clock">--:--:-- ET</time><span class="top-date" id="date-label">NEW YORK</span></div>
     </header>
 
@@ -108,6 +109,19 @@
       <header class="auth-dialog-header"><div><span class="eyebrow">NYC ALERT ACCOUNT</span><h2 id="auth-title">Log in</h2></div><button class="auth-close" id="auth-close" type="button" aria-label="Close">×</button></header>
       <p class="auth-message" id="auth-message" role="status" aria-live="polite"></p>
       <form id="auth-form" class="auth-form"></form>
+      <section class="webhook-manager" id="webhook-manager" hidden>
+        <p class="webhook-manager-note">Send qualified incident alerts to your Discord or Slack incoming webhook. Only your account's Buff or News Media-qualified incidents are delivered. Endpoints are treated as secrets and cannot be viewed after saving.</p>
+        <p class="webhook-manager-warning" id="webhook-access-warning" hidden>Webhook access is suspended by an administrator. Existing destinations will not receive alerts.</p>
+        <form id="account-webhook-form" class="webhook-create-form">
+          <label class="auth-field">DESTINATION NAME<input name="name" maxlength="80" required placeholder="Brooklyn alerts"></label>
+          <label class="auth-field">PLATFORM<select name="platform"><option value="discord">Discord</option><option value="slack">Slack</option></select></label>
+          <label class="auth-field full">INCOMING WEBHOOK URL<input name="url" type="url" maxlength="2000" required autocomplete="off" placeholder="https://discord.com/api/webhooks/…"></label>
+          <fieldset class="webhook-boroughs"><legend>BOROUGHS</legend><label><input type="checkbox" name="boroughs" value="Manhattan"> Manhattan</label><label><input type="checkbox" name="boroughs" value="Bronx"> Bronx</label><label><input type="checkbox" name="boroughs" value="Queens"> Queens</label><label><input type="checkbox" name="boroughs" value="Brooklyn"> Brooklyn</label><label><input type="checkbox" name="boroughs" value="Staten Island"> Staten Island</label><label><input type="checkbox" name="boroughs" value="all" checked> All boroughs</label></fieldset>
+          <button class="auth-form-submit" type="submit">Add webhook destination</button>
+        </form>
+        <p class="webhook-limit" id="webhook-limit"></p>
+        <div class="webhook-list" id="account-webhooks-list" aria-live="polite"></div>
+      </section>
     </section>
   </div>
   <div class="adblock-modal" id="adblock-modal" role="alertdialog" aria-modal="true" aria-labelledby="adblock-title" aria-describedby="adblock-message" hidden>

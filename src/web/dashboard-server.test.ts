@@ -92,18 +92,21 @@ describe('DashboardServer account routes', () => {
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
-      assert.match(html, /\/admin\.js\?v=admin-20261013-2/);
+      assert.match(html, /\/admin\.js\?v=admin-webhooks-20261015-1/);
       assert.match(html, /id="update-website"/);
       const wordmark = await fetch(`${origin}/nyc-alert-wordmark.svg`);
       assert.equal(wordmark.status, 200);
       assert.match(wordmark.headers.get('content-type') ?? '', /image\/svg\+xml/);
       assert.match(await wordmark.text(), /NYC Alert/);
-      const script = await fetch(`${origin}/admin.js?v=admin-20261013-2`);
+      const script = await fetch(`${origin}/admin.js?v=admin-webhooks-20261015-1`);
       assert.equal(script.status, 200);
       assert.equal(script.headers.get('cache-control'), 'no-store');
       const adminScript = await script.text();
       assert.match(adminScript, /async function loadOverview\(\)/);
       assert.match(adminScript, /Dashboard reconnecting during update/);
+      const webhookStyles = await fetch(`${origin}/webhooks.css`);
+      assert.equal(webhookStyles.status, 200);
+      assert.match(await webhookStyles.text(), /\.webhook-manager/);
     } finally { await server.stop(); }
   });
 
@@ -229,6 +232,81 @@ describe('DashboardServer account routes', () => {
       assert.deepEqual((await saved.json() as { preferences: unknown }).preferences, expected);
       const loaded = await fetch(`${origin}/api/account/preferences`, { headers: { Cookie: cookie } });
       assert.deepEqual((await loaded.json() as { preferences: unknown }).preferences, expected);
+    } finally { await server.stop(); }
+  });
+
+  it('allows approved accounts to manage secret Discord and Slack endpoints and lets admins suspend delivery', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const accounts = new AccountStore(join(testDirectory, 'account-webhook-routes'));
+    await accounts.init();
+    const registered = await accounts.register({
+      firstName: 'Webhook', lastName: 'Account', email: 'webhook-routes@example.test', phone: '2125550100',
+      usageCase: 'Testing webhook management routes.', accountType: 'news', password: 'Strong-test-password-123'
+    });
+    const verified = await accounts.verifyEmail(registered.verificationToken);
+    await accounts.updateAccount(verified.id, { status: 'approved' });
+    const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
+      publicUrl: origin, trustProxy: true, adminEmail: 'admin-webhooks@example.test', adminPassword: 'test-admin-password-long',
+      smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+    });
+    await server.start();
+    try {
+      const login = await fetch(`${origin}/api/auth/login`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: verified.email, password: 'Strong-test-password-123' })
+      });
+      assert.equal(login.status, 200);
+      const userCookie = login.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(userCookie);
+
+      const missingOrigin = await fetch(`${origin}/api/account/webhooks`, {
+        method: 'POST', headers: { Cookie: userCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'No origin', platform: 'discord', url: 'https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwx', boroughs: 'all' })
+      });
+      assert.equal(missingOrigin.status, 403);
+      const invalidHost = await fetch(`${origin}/api/account/webhooks`, {
+        method: 'POST', headers: { Origin: origin, Cookie: userCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Wrong host', platform: 'discord', url: 'https://discord.com.evil.example/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwx', boroughs: 'all' })
+      });
+      assert.equal(invalidHost.status, 400);
+
+      const secret = 'abcdefghijklmnopqrstuvwx';
+      const created = await fetch(`${origin}/api/account/webhooks`, {
+        method: 'POST', headers: { Origin: origin, Cookie: userCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Queens Discord', platform: 'discord', url: `https://discord.com/api/webhooks/123456789012345678/${secret}`, boroughs: ['Queens'] })
+      });
+      assert.equal(created.status, 201);
+      const webhookId = (await created.json() as { webhook: { id: string } }).webhook.id;
+      const session = await fetch(`${origin}/api/auth/session`, { headers: { Cookie: userCookie } });
+      assert.equal((await session.text()).includes(secret), false);
+      assert.equal(accounts.listWebhookTargets('Queens', 'news').length, 1);
+
+      const adminLogin = await fetch(`${origin}/api/auth/login`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'admin-webhooks@example.test', password: 'test-admin-password-long' })
+      });
+      assert.equal(adminLogin.status, 200);
+      const adminCookie = adminLogin.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(adminCookie);
+      const adminList = await fetch(`${origin}/api/admin/webhooks`, { headers: { Cookie: adminCookie } });
+      assert.equal((await adminList.text()).includes(secret), false);
+      const suspended = await fetch(`${origin}/api/admin/webhooks/${verified.id}/${webhookId}`, {
+        method: 'PATCH', headers: { Origin: origin, Cookie: adminCookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ suspended: true })
+      });
+      assert.equal(suspended.status, 200);
+      assert.equal(accounts.listWebhookTargets('Queens', 'news').length, 0);
+      const accessSuspended = await fetch(`${origin}/api/admin/accounts/${verified.id}`, {
+        method: 'PATCH', headers: { Origin: origin, Cookie: adminCookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ webhookAccessSuspended: true })
+      });
+      assert.equal(accessSuspended.status, 200);
+      const blockedCreate = await fetch(`${origin}/api/account/webhooks`, {
+        method: 'POST', headers: { Origin: origin, Cookie: userCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Blocked', platform: 'slack', url: 'https://hooks.slack.com/services/T12345678/B12345678/abcdefghijklmnopqrstuvwxyz', boroughs: 'all' })
+      });
+      assert.equal(blockedCreate.status, 400);
+      const removed = await fetch(`${origin}/api/account/webhooks/${webhookId}`, { method: 'DELETE', headers: { Origin: origin, Cookie: userCookie } });
+      assert.equal(removed.status, 200);
     } finally { await server.stop(); }
   });
 

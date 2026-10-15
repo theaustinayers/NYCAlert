@@ -70,4 +70,31 @@ describe('AccountStore', () => {
     await reloaded.init();
     assert.deepEqual(reloaded.listAccounts()[0]?.dashboardPreferences, saved);
   });
+
+  it('limits accounts to ten webhook destinations and excludes suspended or secret endpoints from public views', async () => {
+    const store = new AccountStore(join(testDirectory, 'account-webhooks'));
+    await store.init();
+    const registered = await store.register({
+      firstName: 'Webhook', lastName: 'Tester', email: 'webhook-account@example.test', phone: '2125550100',
+      usageCase: 'Testing account webhook management.', accountType: 'buff', password: 'Strong-test-password-123'
+    });
+    const verified = await store.verifyEmail(registered.verificationToken);
+    await store.updateAccount(verified.id, { status: 'approved' });
+    const endpoints = Array.from({ length: 10 }, (_, index) => `https://discord.com/api/webhooks/123456789012345678/${String(index).padStart(24, 'a')}`);
+    for (const [index, url] of endpoints.entries()) {
+      await store.addAccountWebhook(verified.id, { id: index.toString(16).padStart(32, '0'), name: `Target ${index}`, url, platform: 'discord', boroughs: ['Brooklyn'] });
+    }
+    await assert.rejects(store.addAccountWebhook(verified.id, { id: 'f'.repeat(32), name: 'Over limit', url: endpoints[0]!, platform: 'discord', boroughs: 'all' }), /at most 10/);
+    assert.equal(store.listWebhookTargets('Brooklyn', 'buff').length, 10);
+    assert.equal(store.listWebhookTargets('Queens', 'buff').length, 0);
+    assert.equal(await store.setWebhookSuspended(verified.id, '0'.repeat(32), true), true);
+    assert.equal(store.listWebhookTargets('Brooklyn', 'buff').length, 9);
+    await store.setWebhookAccessSuspended(verified.id, true);
+    assert.equal(store.listWebhookTargets('Brooklyn', 'buff').length, 0);
+    await assert.rejects(store.addAccountWebhook(verified.id, { id: 'e'.repeat(32), name: 'Blocked', url: endpoints[0]!, platform: 'discord', boroughs: 'all' }), /access is suspended/);
+    const publicAccount = store.listAccounts().find((account) => account.id === verified.id)!;
+    assert.equal(publicAccount.webhookAccessSuspended, true);
+    assert.equal(JSON.stringify(publicAccount).includes('abcdefghijklmnopqrst'), false);
+    assert.equal('url' in publicAccount.webhooks[0]!, false);
+  });
 });

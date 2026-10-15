@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Borough } from '../domain/subscriptions.js';
 import { alertCategories, type AlertCategory } from '../domain/triage.js';
+import { inferWebhookPlatform, type WebhookAudience, type WebhookPlatform, type WebhookTarget } from '../providers/webhook-delivery.js';
 
 export type AudienceAccountType = 'buff' | 'news';
 export type DashboardAudience = 'public' | 'buff' | 'news';
@@ -20,7 +21,8 @@ export interface DashboardPreferences {
 }
 export type AdminRole = 'owner' | 'admin' | 'moderator' | 'reviewer';
 export type AccountStatus = 'pending-verification' | 'pending-approval' | 'approved' | 'suspended';
-export interface AccountWebhook { id: string; name: string; url: string; boroughs: Borough[] | 'all'; }
+export interface AccountWebhook { id: string; name: string; url: string; platform?: WebhookPlatform; boroughs: Borough[] | 'all'; suspendedAt?: string; }
+export interface AccountWebhookSummary { id: string; name: string; platform?: WebhookPlatform; boroughs: Borough[] | 'all'; suspendedAt?: string; }
 export interface AccountRecord {
   id: string;
   firstName: string;
@@ -33,6 +35,7 @@ export interface AccountRecord {
   adminRole?: Exclude<AdminRole, 'owner'>;
   status: AccountStatus;
   emailVerifiedAt?: string;
+  webhookAccessSuspended?: boolean;
   createdAt: string;
   passwordSalt: string;
   passwordHash: string;
@@ -41,7 +44,7 @@ export interface AccountRecord {
   webhooks: AccountWebhook[];
   dashboardPreferences?: DashboardPreferences;
 }
-export interface PublicAccount { id: string; firstName: string; lastName: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: Exclude<AdminRole, 'owner'>; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhook[]; dashboardPreferences?: DashboardPreferences; }
+export interface PublicAccount { id: string; firstName: string; lastName: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: Exclude<AdminRole, 'owner'>; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhookSummary[]; webhookAccessSuspended: boolean; dashboardPreferences?: DashboardPreferences; }
 export interface AdminAccount extends PublicAccount { phone: string; usageCase: string; }
 
 const passwordBytes = 64;
@@ -258,9 +261,11 @@ export class AccountStore {
     return preferences;
   }
 
-  async addAccountWebhook(accountId: string, webhook: AccountWebhook): Promise<AccountWebhook[]> {
+  async addAccountWebhook(accountId: string, webhook: AccountWebhook, allowSuspendedAccess = false): Promise<AccountWebhook[]> {
     const account = this.accounts.find((item) => item.id === accountId && !item.isAdmin && item.status === 'approved' && item.emailVerifiedAt);
     if (!account) throw new Error('An approved audience account is required to assign a webhook.');
+    if (account.accountType !== 'buff' && account.accountType !== 'news') throw new Error('Only Buff and News Media accounts can use webhooks.');
+    if (account.webhookAccessSuspended && !allowSuspendedAccess) throw new Error('Webhook access is suspended for this account.');
     if (account.webhooks.some((item) => item.id === webhook.id)) throw new Error('Webhook already exists.');
     if (account.webhooks.length >= 10) throw new Error('An account can have at most 10 webhooks.');
     account.webhooks.push({ ...webhook, name: webhook.name.trim().slice(0, 80) });
@@ -278,9 +283,32 @@ export class AccountStore {
     return true;
   }
 
-  listWebhookTargets(borough: Borough | 'Citywide', audience: AudienceAccountType): AccountWebhook[] {
-    return this.accounts.filter((account) => account.status === 'approved' && account.emailVerifiedAt && account.accountType === audience)
-      .flatMap((account) => account.webhooks.filter((hook) => hook.boroughs === 'all' || (borough !== 'Citywide' && hook.boroughs.includes(borough))));
+  async setWebhookSuspended(accountId: string, webhookId: string, suspended: boolean): Promise<boolean> {
+    const account = this.accounts.find((item) => item.id === accountId && !item.isAdmin);
+    const webhook = account?.webhooks.find((item) => item.id === webhookId);
+    if (!webhook) return false;
+    if (suspended) webhook.suspendedAt ??= new Date().toISOString();
+    else delete webhook.suspendedAt;
+    await this.persist();
+    return true;
+  }
+
+  async setWebhookAccessSuspended(accountId: string, suspended: boolean): Promise<PublicAccount | undefined> {
+    const account = this.accounts.find((item) => item.id === accountId && !item.isAdmin);
+    if (!account) return undefined;
+    account.webhookAccessSuspended = suspended;
+    await this.persist();
+    return this.publicView(account);
+  }
+
+  listWebhookTargets(borough: Borough | 'Citywide', audience: WebhookAudience): WebhookTarget[] {
+    return this.accounts.filter((account) => account.status === 'approved' && account.emailVerifiedAt && !account.webhookAccessSuspended && account.accountType === audience)
+      .flatMap((account) => account.webhooks
+        .filter((hook) => !hook.suspendedAt && (hook.boroughs === 'all' || (borough !== 'Citywide' && hook.boroughs.includes(borough))))
+        .flatMap((hook) => {
+          const platform = hook.platform ?? inferWebhookPlatform(hook.url);
+          return platform ? [{ id: hook.id, accountId: account.id, accountType: audience, platform, url: hook.url }] : [];
+        }));
   }
 
   private revokeAccountSessions(id: string): void {
@@ -289,7 +317,11 @@ export class AccountStore {
 
   private publicView(account: AccountRecord): PublicAccount {
     const { id, firstName, lastName, email, accountType, isAdmin, adminRole, status, emailVerifiedAt, createdAt, webhooks } = account;
-    return { id, firstName, lastName, email, accountType, isAdmin: Boolean(isAdmin), ...(isAdmin ? { adminRole: adminRole ?? 'admin' } : {}), status, emailVerified: Boolean(emailVerifiedAt), createdAt, webhooks, ...(account.dashboardPreferences ? { dashboardPreferences: { ...account.dashboardPreferences, boroughs: [...account.dashboardPreferences.boroughs], liveCategories: [...account.dashboardPreferences.liveCategories] } } : {}) };
+    const webhookSummaries: AccountWebhookSummary[] = webhooks.map((webhook) => {
+      const platform = webhook.platform ?? inferWebhookPlatform(webhook.url);
+      return { id: webhook.id, name: webhook.name, ...(platform ? { platform } : {}), boroughs: webhook.boroughs, ...(webhook.suspendedAt ? { suspendedAt: webhook.suspendedAt } : {}) };
+    });
+    return { id, firstName, lastName, email, accountType, isAdmin: Boolean(isAdmin), ...(isAdmin ? { adminRole: adminRole ?? 'admin' } : {}), status, emailVerified: Boolean(emailVerifiedAt), createdAt, webhookAccessSuspended: Boolean(account.webhookAccessSuspended), webhooks: webhookSummaries, ...(account.dashboardPreferences ? { dashboardPreferences: { ...account.dashboardPreferences, boroughs: [...account.dashboardPreferences.boroughs], liveCategories: [...account.dashboardPreferences.liveCategories] } } : {}) };
   }
 
   private async persist(): Promise<void> {

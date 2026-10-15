@@ -12,11 +12,34 @@ import { SourceCallLedger } from './source-call-ledger.js';
 import { LearningLog } from './learning-log.js';
 import type { IncidentPostPublisher, XIncidentPost } from '../providers/x-post.js';
 import type { CallTriage } from '../domain/triage.js';
+import type { WebhookDeliveryRequest } from '../providers/webhook-delivery.js';
 
 const testDirectory = await mkdtemp(join(tmpdir(), 'nyc-call-processor-'));
 after(async () => rm(testDirectory, { recursive: true, force: true }));
 
 describe('CallProcessor', () => {
+  it('schedules only qualified Buff and News Media webhooks for published incidents and updates', async () => {
+    const calls: WebhookDeliveryRequest[] = [];
+    let index = 0;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript supplied'); },
+      async triage() {
+        index += 1;
+        return { shouldAlert: true, category: 'newsworthy', headline: 'Working Fire', summary: 'Units responding.', location: '100 Example Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 4, buffInterestScore: 5, assignmentDeskScore: 4 };
+      }
+    };
+    const delivery = { async deliver(request: WebhookDeliveryRequest) { calls.push(request); return []; } };
+    const processor = new CallProcessor({} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, new DashboardStore(false),
+      false, 0.78, 4, undefined, 4, 4, undefined, undefined, 'https://nycalert.ai', 60_000, undefined, delivery);
+    const occurredAt = new Date(Date.now() - 2 * 60_000);
+    await processor.process({ id: 'webhook-create', borough: 'Brooklyn', agency: 'FDNY', occurredAt, transcript: 'Working fire at 100 Example Street.' });
+    await processor.process({ id: 'webhook-update', borough: 'Brooklyn', agency: 'FDNY', occurredAt: new Date(occurredAt.getTime() + 60_000), transcript: 'Primary search completed; fire extinguished at 100 Example Street.' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls.map((call) => call.event), ['incident.created', 'incident.updated']);
+    assert.deepEqual(calls[0]?.audiences, ['buff', 'news']);
+    assert.deepEqual(calls[1]?.audiences, ['buff', 'news']);
+  });
+
   it('replays a synthetic Series 5 Box sequence: pending address, explicit correction, late operational report, scoped negative', async () => {
     const triages: CallTriage[] = [
       { shouldAlert: true, category: 'newsworthy', headline: 'Reported Dwelling Fire', summary: 'Reported dwelling fire at initial address.', location: '121-11 Example Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 4 },

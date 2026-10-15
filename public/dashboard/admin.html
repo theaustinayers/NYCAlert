@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="/activity.css">
   <link rel="stylesheet" href="/admin.css">
   <link rel="stylesheet" href="/admin-learning.css">
-  <script src="/admin.js?v=admin-20261013-2" defer></script>
+  <script src="/admin.js?v=admin-webhooks-20261015-1" defer></script>
 </head>
 <body class="admin-page">
   <header class="admin-topbar">
@@ -46,9 +46,9 @@
         <div id="incidents-list" class="admin-incident-list"><p class="admin-muted">Loading incidents…</p></div>
       </section>
       <section class="admin-section" id="section-webhooks" hidden>
-        <div class="admin-notice"><strong>Webhook delivery status</strong><p>Webhook URLs are stored and assigned to accounts. Outbound webhook delivery is not implemented or active yet.</p></div>
+        <div class="admin-notice"><strong>Active webhook delivery</strong><p>Qualified incident publications and updates are delivered to approved Buff or News Media accounts' Discord or Slack incoming webhooks. Endpoint URLs are secret and are not shown in this dashboard. Administrators can suspend individual destinations or all webhook access for an account.</p></div>
         <div class="admin-panel-head"><div><span class="admin-eyebrow">ASSIGNED DESTINATIONS</span><h2>Webhooks</h2></div><button class="admin-secondary" id="refresh-webhooks" type="button">Refresh</button></div>
-        <form id="webhook-form" class="admin-form-grid"><label>ASSIGN TO APPROVED USER<select name="accountId" id="webhook-account" required></select></label><label>DISPLAY NAME<input name="name" maxlength="80" required placeholder="FDNY Brooklyn alerts"></label><label class="wide">HTTPS WEBHOOK URL<input name="url" type="url" placeholder="https://…" required></label><fieldset class="admin-borough-field"><legend>BOROUGHS</legend><label><input type="checkbox" name="boroughs" value="Manhattan">Manhattan</label><label><input type="checkbox" name="boroughs" value="Bronx">Bronx</label><label><input type="checkbox" name="boroughs" value="Queens">Queens</label><label><input type="checkbox" name="boroughs" value="Brooklyn">Brooklyn</label><label><input type="checkbox" name="boroughs" value="Staten Island">Staten Island</label><label><input type="checkbox" name="boroughs" value="all">All boroughs</label></fieldset><button class="admin-primary" type="submit">Save webhook target</button></form>
+        <form id="webhook-form" class="admin-form-grid"><label>ASSIGN TO APPROVED USER<select name="accountId" id="webhook-account" required></select></label><label>DISPLAY NAME<input name="name" maxlength="80" required placeholder="FDNY Brooklyn alerts"></label><label>PLATFORM<select name="platform"><option value="discord">Discord</option><option value="slack">Slack</option></select></label><label class="wide">INCOMING WEBHOOK URL<input name="url" type="url" placeholder="https://…" required></label><fieldset class="admin-borough-field"><legend>BOROUGHS</legend><label><input type="checkbox" name="boroughs" value="Manhattan">Manhattan</label><label><input type="checkbox" name="boroughs" value="Bronx">Bronx</label><label><input type="checkbox" name="boroughs" value="Queens">Queens</label><label><input type="checkbox" name="boroughs" value="Brooklyn">Brooklyn</label><label><input type="checkbox" name="boroughs" value="Staten Island">Staten Island</label><label><input type="checkbox" name="boroughs" value="all">All boroughs</label></fieldset><button class="admin-primary" type="submit">Save webhook target</button></form>
         <div id="webhooks-list" class="admin-card-list"><p class="admin-muted">Loading webhook assignments…</p></div>
       </section>
       <section class="admin-section" id="section-analytics" hidden>

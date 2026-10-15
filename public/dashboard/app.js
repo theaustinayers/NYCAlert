@@ -979,12 +979,22 @@ function renderAuthHeader() {
     ? 'Administrator'
     : state.authSession?.account?.firstName || '';
   $('#admin-dashboard').hidden = state.authSession?.kind !== 'admin';
+  $('#account-webhooks').hidden = state.authSession?.kind !== 'user';
 }
 
 function wireAuthControls() {
   $('#auth-login').addEventListener('click', () => openAuthModal('login'));
   $('#auth-register').addEventListener('click', () => openAuthModal('register'));
   $('#auth-close').addEventListener('click', () => { $('#auth-modal').hidden = true; });
+  $('#account-webhooks').addEventListener('click', openWebhookManager);
+  $('#account-webhook-form').addEventListener('submit', createAccountWebhook);
+  $('#account-webhook-form').querySelectorAll('input[name="boroughs"]').forEach((input) => input.addEventListener('change', () => {
+    const all = $('#account-webhook-form').querySelector('input[value="all"]');
+    const boroughBoxes = [...$('#account-webhook-form').querySelectorAll('input[name="boroughs"]')].filter((box) => box.value !== 'all');
+    if (input.value === 'all' && input.checked) boroughBoxes.forEach((box) => { box.checked = false; });
+    else if (input.value !== 'all' && input.checked) all.checked = false;
+    if (!boroughBoxes.some((box) => box.checked) && input.value !== 'all') all.checked = true;
+  }));
   $('#auth-modal').addEventListener('click', (event) => {
     if (event.target === $('#auth-modal')) $('#auth-modal').hidden = true;
   });
@@ -996,6 +1006,7 @@ function wireAuthControls() {
     persistAudienceSelection();
     initializeAudienceView();
     renderAuthHeader();
+    $('#webhook-manager').hidden = true;
     renderIncidents();
     renderLiveCalls();
   });
@@ -1106,6 +1117,69 @@ async function authRequest(path, body) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || 'Account request failed.');
   return result;
+}
+
+async function openWebhookManager() {
+  if (state.authSession?.kind !== 'user') return;
+  $('#auth-modal').hidden = false;
+  $('#auth-title').textContent = 'Manage webhooks';
+  $('#auth-form').hidden = true;
+  $('#webhook-manager').hidden = false;
+  renderAuthMessage('');
+  await loadAccountWebhooks();
+}
+
+async function loadAccountWebhooks() {
+  const list = $('#account-webhooks-list');
+  try {
+    const response = await fetch('/api/account/webhooks', { credentials: 'same-origin', cache: 'no-store' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Could not load webhook destinations.');
+    const hooks = data.webhooks || [];
+    const suspended = Boolean(data.accessSuspended);
+    $('#webhook-access-warning').hidden = !suspended;
+    $('#webhook-limit').textContent = `${hooks.length} of ${data.limit || 10} webhook destinations used.`;
+    const form = $('#account-webhook-form');
+    form.querySelectorAll('input,select,button').forEach((control) => { control.disabled = suspended || hooks.length >= (data.limit || 10); });
+    list.innerHTML = hooks.length ? hooks.map((hook) => `<article class="webhook-item"><div><strong>${escapeHtml(hook.name)}</strong><small>${escapeHtml((hook.platform || 'Webhook').toUpperCase())} · ${escapeHtml(hook.boroughs === 'all' ? 'All boroughs' : hook.boroughs.join(', '))}${hook.suspendedAt ? ' · Suspended by admin' : ''}</small></div><button type="button" data-account-webhook-delete="${escapeHtml(hook.id)}" ${suspended ? 'disabled' : ''}>Remove</button></article>`).join('') : '<p class="webhook-manager-note">No destinations yet.</p>';
+    list.querySelectorAll('[data-account-webhook-delete]').forEach((button) => button.addEventListener('click', () => removeAccountWebhook(button.dataset.accountWebhookDelete)));
+  } catch (error) {
+    list.innerHTML = `<p class="webhook-manager-warning">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function createAccountWebhook(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const selected = [...form.querySelectorAll('input[name="boroughs"]:checked')].map((input) => input.value);
+  const payload = Object.fromEntries(new FormData(form));
+  payload.boroughs = selected.includes('all') ? 'all' : selected;
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/account/webhooks', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Could not create webhook destination.');
+    form.reset();
+    await loadAccountWebhooks();
+    renderAuthMessage('Webhook destination added. The URL is stored as a secret and will not be shown again.', 'success');
+  } catch (error) {
+    renderAuthMessage(error.message, 'error');
+  } finally {
+    button.disabled = false;
+    await loadAccountWebhooks();
+  }
+}
+
+async function removeAccountWebhook(id) {
+  if (!confirm('Remove this webhook destination? New incident alerts will no longer be sent to it.')) return;
+  try {
+    const response = await fetch(`/api/account/webhooks/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'same-origin' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Could not remove webhook destination.');
+    renderAuthMessage('Webhook destination removed.', 'success');
+    await loadAccountWebhooks();
+  } catch (error) { renderAuthMessage(error.message, 'error'); }
 }
 
 async function initializePublicConfig() {

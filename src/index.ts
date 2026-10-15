@@ -20,9 +20,11 @@ import { DeploymentUpdater } from './services/deployment-updater.js';
 import { XApiIncidentPublisher } from './providers/x-post.js';
 import { SourceCallLedger } from './services/source-call-ledger.js';
 import { IncidentVoteStore } from './services/incident-vote-store.js';
+import { WebhookDeliveryProvider } from './providers/webhook-delivery.js';
 
 const store = new SubscriptionStore(config.dataDir);
 const accountStore = new AccountStore(config.dataDir);
+const webhookDelivery = new WebhookDeliveryProvider(accountStore, config.dashboardPublicUrl);
 const siteSettingsStore = new SiteSettingsStore(config.dataDir);
 const learningLog = new LearningLog(config.dataDir, config.aiLearningLogEnabled, config.aiLearningLogRetentionDays, config.aiLearningLogMaxEvents);
 const sourceCallLedger = new SourceCallLedger(config.dataDir);
@@ -111,7 +113,7 @@ client.once(Events.ClientReady, async (readyClient) => {
       new WhisperCppTranscriber(config.whisperModelPath, config.whisperExecutablePath, config.whisperThreads, undefined, config.ffmpegPath),
       new OpenAiTriageProvider(config.openAiApiKey, config.triageModel)
     );
-    const processor = new CallProcessor(client, store, analysis, dashboardStore, config.broadcastifyAudioRedistributionAllowed, 0.78, config.newsworthinessThreshold, incidentGeocoder, config.buffInterestThreshold, config.newsMediaDeskThreshold, learningLog, config.xAutoPostEnabled ? xPublisher : undefined, config.dashboardPublicUrl, config.xPostDelayMs, sourceCallLedger);
+    const processor = new CallProcessor(client, store, analysis, dashboardStore, config.broadcastifyAudioRedistributionAllowed, 0.78, config.newsworthinessThreshold, incidentGeocoder, config.buffInterestThreshold, config.newsMediaDeskThreshold, learningLog, config.xAutoPostEnabled ? xPublisher : undefined, config.dashboardPublicUrl, config.xPostDelayMs, sourceCallLedger, webhookDelivery);
     dashboard.setPendingIncidentAdminHandlers(
       () => processor.listPendingIncidents(),
       (pendingId) => processor.discardPendingIncident(pendingId),

@@ -15,6 +15,7 @@ import type { SubscriptionStore } from '../storage/subscription-store.js';
 import type { DashboardStore, DashboardIncident } from './dashboard-store.js';
 import { LearningLog, type LearningEvent, type LearningWorkflowStage } from './learning-log.js';
 import type { SourceCallLedger } from './source-call-ledger.js';
+import type { IncidentWebhookDelivery, WebhookAudience } from '../providers/webhook-delivery.js';
 
 const nonSpeechPlaceholders = new Set([
   '', 'silence', 'blank audio', 'inaudible', 'no speech',
@@ -109,7 +110,8 @@ export class CallProcessor {
     private readonly incidentPublisher?: IncidentPostPublisher,
     private readonly publicUrl = 'https://nycalert.ai',
     private readonly xPostDelayMs = 60_000,
-    private readonly sourceCallLedger?: SourceCallLedger
+    private readonly sourceCallLedger?: SourceCallLedger,
+    private readonly webhookDelivery?: IncidentWebhookDelivery
   ) {}
 
   listPendingIncidents(): Array<{ id: string; agency: RadioCall['agency']; borough: RadioCall['borough']; eventType?: CallTriage['incidentType']; summary: string; location?: string; createdAt: string; expiresAt: string }> {
@@ -170,6 +172,9 @@ export class CallProcessor {
       buffInterestScore: pending.buffInterestScore,
       assignmentDeskScore: pending.assignmentDeskScore
     });
+    const buffQualified = pending.category !== 'routine' && pending.confidence >= this.minTriageConfidence && pending.buffInterestScore >= this.minBuffInterest;
+    const newsQualified = pending.category !== 'routine' && pending.confidence >= this.minTriageConfidence && pending.assignmentDeskScore >= this.minNewsMediaDesk;
+    this.scheduleWebhookDelivery(incident, 'incident.created', qualifiedWebhookAudiences(buffQualified, newsQualified), pending.callId);
     pending.workflowPath.push('pending-approved');
     this.learningLog.record({
       eventId: pending.eventId,
@@ -442,6 +447,7 @@ export class CallProcessor {
         await this.editTrackedMessages(matchingIncident, buildIncidentEmbed(updated));
         logger.info({ incidentId: matchingIncident.id, callId: call.id, unitIds }, 'Updated existing incident with radio follow-up');
         this.recordLearning(call, trace, 'incident-updated', { incidentId: matchingIncident.id, disposition: 'correlated-follow-up', correlation: { candidateCount: candidates.length, incidentId: matchingIncident.id } });
+        this.scheduleWebhookDelivery(updated, 'incident.updated', qualifiedWebhookAudiences(buffQualified, newsDeskQualified), call.id);
       } else {
         this.recordLearning(call, trace, 'incident-suppressed', { incidentId: matchingIncident.id, disposition: 'matched-incident-update-failed' });
       }
@@ -590,6 +596,7 @@ export class CallProcessor {
       disposition: matchingPending ? 'published-and-attached-pending-report' : 'new-public-incident',
       correlation: { candidateCount: candidates.length, pendingMatchCount: pendingMatches.length, incidentId: incident.id }
     });
+    this.scheduleWebhookDelivery(incident, 'incident.created', qualifiedWebhookAudiences(buffQualified, newsDeskQualified), call.id);
 
     if (this.incidentPublisher && publicQualified && triage.incidentType !== 'medical') {
       this.scheduleXIncidentPost(incident.id, call, trace);
@@ -698,6 +705,15 @@ export class CallProcessor {
       ...(trace.location ? { location: trace.location } : {}),
       ...(trace.geocode ? { geocode: trace.geocode } : {}),
       ...details
+    });
+  }
+
+  private scheduleWebhookDelivery(incident: DashboardIncident, event: 'incident.created' | 'incident.updated', audiences: WebhookAudience[], callId: string): void {
+    if (!this.webhookDelivery || audiences.length === 0) return;
+    void this.webhookDelivery.deliver({ incident, event, audiences }).then((results) => {
+      logger.info({ callId, incidentId: incident.id, event, targetCount: results.length, sent: results.filter((result) => result.outcome === 'sent').length, failed: results.filter((result) => result.outcome !== 'sent').length }, 'Account webhook delivery completed');
+    }).catch((error: unknown) => {
+      logger.error({ callId, incidentId: incident.id, event, errorName: error instanceof Error ? error.name : 'Error' }, 'Account webhook delivery failed');
     });
   }
 
@@ -810,6 +826,10 @@ export class CallProcessor {
       });
     }
   }
+}
+
+function qualifiedWebhookAudiences(buffQualified: boolean, newsDeskQualified: boolean): WebhookAudience[] {
+  return [...(buffQualified ? ['buff' as const] : []), ...(newsDeskQualified ? ['news' as const] : [])];
 }
 
 function boroughExplicitlyStated(location?: string): IncidentIdentity['borough'] | undefined {

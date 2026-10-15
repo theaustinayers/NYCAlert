@@ -1,6 +1,5 @@
 import { createReadStream } from 'node:fs';
 import { createHash, randomBytes, timingSafeEqual, randomUUID } from 'node:crypto';
-import { isIP } from 'node:net';
 import { readFile, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
@@ -13,6 +12,7 @@ import type { SiteSettings, SiteSettingsStore } from '../storage/site-settings-s
 import type { LearningLog } from '../services/learning-log.js';
 import type { DeploymentUpdater } from '../services/deployment-updater.js';
 import type { XIntegrationTester } from '../providers/x-post.js';
+import { validateWebhookEndpoint, type WebhookPlatform } from '../providers/webhook-delivery.js';
 import { isIncidentVote, type IncidentVoteStore } from '../services/incident-vote-store.js';
 import { communityPromotionThreshold, qualifiesForCommunityPromotion } from '../services/community-promotion.js';
 import { ActivePresence } from '../services/active-presence.js';
@@ -37,6 +37,7 @@ const sessionMaxAgeSeconds = 12 * 60 * 60;
 const staticFiles = new Map<string, [string, string]>([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.css', ['app.css', 'text/css; charset=utf-8']],
+  ['/webhooks.css', ['webhooks.css', 'text/css; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/live.css', ['live.css', 'text/css; charset=utf-8']],
   ['/live-overflow.css', ['live-overflow.css', 'text/css; charset=utf-8']],
@@ -365,6 +366,62 @@ export class DashboardServer {
   }
 
   private async handleAccountRoutes(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
+    if (url.pathname === '/api/account/webhooks' || /^\/api\/account\/webhooks\/[a-f0-9]{32}$/i.test(url.pathname)) {
+      if (!this.accounts || !this.authConfig) {
+        json(response, 503, { error: 'Account services are not configured on this server.' });
+        return true;
+      }
+      const session = this.accounts.getSession(this.readSessionToken(request));
+      if (session?.kind !== 'user') {
+        json(response, 401, { error: 'Sign in with an approved Buff or News Media account to manage webhooks.' });
+        return true;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/account/webhooks') {
+        json(response, 200, { webhooks: session.account.webhooks, limit: 10, accessSuspended: session.account.webhookAccessSuspended });
+        return true;
+      }
+      if (!this.hasSameOrigin(request)) {
+        json(response, 403, { error: 'Request origin was not accepted.' });
+        return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/account/webhooks') {
+        if (!this.takeRateLimit(request, 'account-webhook-create', 10, 60 * 60_000)) {
+          json(response, 429, { error: 'Webhook creation is temporarily rate-limited.' });
+          return true;
+        }
+        try {
+          const body = await readJsonBody(request);
+          const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
+          const platform = body.platform === 'discord' || body.platform === 'slack' ? body.platform as WebhookPlatform : undefined;
+          const endpoint = platform && typeof body.url === 'string' ? validateWebhookEndpoint(body.url, platform) : undefined;
+          const boroughs: AccountWebhook['boroughs'] | undefined = body.boroughs === 'all' ? 'all'
+            : Array.isArray(body.boroughs) && body.boroughs.length > 0 && body.boroughs.length <= 5 && body.boroughs.every((value) => typeof value === 'string' && isBorough(value))
+              ? [...new Set(body.boroughs as Borough[])] : undefined;
+          if (!name || !endpoint || !platform || !boroughs) {
+            json(response, 400, { error: 'Enter a name, valid Discord or Slack incoming-webhook URL, and borough selection.' });
+            return true;
+          }
+          const webhook: AccountWebhook = { id: randomBytes(16).toString('hex'), name, url: endpoint, platform, boroughs };
+          const webhooks = await this.accounts.addAccountWebhook(session.account.id, webhook);
+          logger.info({ action: 'account-webhook-created', accountId: session.account.id, webhookId: webhook.id, platform }, 'Account webhook created');
+          json(response, 201, { webhook: webhooks.find((item) => item.id === webhook.id) && {
+            id: webhook.id, name: webhook.name, platform, boroughs, suspendedAt: undefined
+          }, limit: 10 });
+        } catch (error) {
+          json(response, 400, { error: error instanceof Error ? error.message : 'Could not create webhook.' });
+        }
+        return true;
+      }
+      const match = /^\/api\/account\/webhooks\/([a-f0-9]{32})$/i.exec(url.pathname);
+      if (request.method === 'DELETE' && match) {
+        const removed = await this.accounts.removeAccountWebhook(session.account.id, match[1]!);
+        if (removed) logger.info({ action: 'account-webhook-deleted', accountId: session.account.id, webhookId: match[1] }, 'Account webhook deleted');
+        json(response, removed ? 200 : 404, removed ? { ok: true } : { error: 'Webhook not found.' });
+        return true;
+      }
+      json(response, 405, { error: 'Method not allowed.' });
+      return true;
+    }
     if (url.pathname === '/api/account/preferences') {
       if (!this.accounts || !this.authConfig) {
         json(response, 503, { error: 'Account services are not configured on this server.' });
@@ -669,7 +726,7 @@ export class DashboardServer {
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/webhooks') {
         const webhooks = this.accounts.listAdminAccounts().flatMap((account) => account.webhooks.map((webhook) => ({ ...webhook, accountId: account.id, accountEmail: account.email, accountType: account.accountType })));
-        json(response, 200, { webhooks, deliveryEnabled: false });
+        json(response, 200, { webhooks, deliveryEnabled: true });
         return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/accounts') {
@@ -770,19 +827,31 @@ export class DashboardServer {
           const body = await readJsonBody(request);
           const accountId = typeof body.accountId === 'string' ? body.accountId : '';
           const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
-          const endpoint = typeof body.url === 'string' ? validateWebhookUrl(body.url) : undefined;
+          const platform = body.platform === 'discord' || body.platform === 'slack' ? body.platform as WebhookPlatform : undefined;
+          const endpoint = platform && typeof body.url === 'string' ? validateWebhookEndpoint(body.url, platform) : undefined;
           const boroughs: AccountWebhook['boroughs'] | undefined = body.boroughs === 'all' ? 'all'
             : Array.isArray(body.boroughs) && body.boroughs.length > 0 && body.boroughs.length <= 5 && body.boroughs.every((value) => typeof value === 'string' && isBorough(value))
               ? [...new Set(body.boroughs as Borough[])] : undefined;
-          if (!name || !endpoint || !boroughs) { json(response, 400, { error: 'Enter a name, public HTTPS endpoint, and valid borough selection.' }); return true; }
-          const webhook = { id: randomBytes(16).toString('hex'), name, url: endpoint, boroughs };
-          const webhooks = await this.accounts.addAccountWebhook(accountId, webhook);
-          logger.info({ action: 'admin-webhook-created', actorId: adminSession.account?.id ?? 'bootstrap-admin', accountId, webhookId: webhook.id }, 'Webhook target created');
-          json(response, 201, { webhook: webhooks.find((item) => item.id === webhook.id), deliveryEnabled: false });
+          if (!name || !endpoint || !platform || !boroughs) { json(response, 400, { error: 'Enter a name, valid Discord or Slack incoming-webhook URL, and borough selection.' }); return true; }
+          const webhook = { id: randomBytes(16).toString('hex'), name, url: endpoint, platform, boroughs };
+          const webhooks = await this.accounts.addAccountWebhook(accountId, webhook, true);
+          logger.info({ action: 'admin-webhook-created', actorId: adminSession.account?.id ?? 'bootstrap-admin', accountId, webhookId: webhook.id, platform }, 'Webhook target created');
+          json(response, 201, { webhook: webhooks.find((item) => item.id === webhook.id) && { id: webhook.id, name: webhook.name, platform, boroughs }, deliveryEnabled: true });
         } catch (error) { json(response, 400, { error: error instanceof Error ? error.message : 'Could not create webhook.' }); }
         return true;
       }
       const webhookMatch = /^\/api\/admin\/webhooks\/([a-f0-9]{32})\/([a-f0-9]{32})$/i.exec(url.pathname);
+      if (webhookMatch && request.method === 'PATCH') {
+        if (!this.hasSameOrigin(request)) { json(response, 403, { error: 'Request origin was not accepted.' }); return true; }
+        try {
+          const body = await readJsonBody(request);
+          if (typeof body.suspended !== 'boolean') { json(response, 400, { error: 'Set suspended to true or false.' }); return true; }
+          const changed = await this.accounts.setWebhookSuspended(webhookMatch[1]!, webhookMatch[2]!, body.suspended);
+          if (changed) logger.warn({ action: body.suspended ? 'admin-webhook-suspended' : 'admin-webhook-resumed', actorId: adminSession.account?.id ?? 'bootstrap-admin', accountId: webhookMatch[1], webhookId: webhookMatch[2] }, body.suspended ? 'Webhook suspended by administrator' : 'Webhook resumed by administrator');
+          json(response, changed ? 200 : 404, changed ? { ok: true, suspended: body.suspended } : { error: 'Webhook not found.' });
+        } catch (error) { json(response, 400, { error: error instanceof Error ? error.message : 'Could not update webhook.' }); }
+        return true;
+      }
       if (webhookMatch && request.method === 'DELETE') {
         if (!this.hasSameOrigin(request)) { json(response, 403, { error: 'Request origin was not accepted.' }); return true; }
         const removed = await this.accounts.removeAccountWebhook(webhookMatch[1]!, webhookMatch[2]!);
@@ -900,12 +969,23 @@ export class DashboardServer {
       try {
         const body = await readJsonBody(request);
         const status = body.status;
-        if (status !== 'approved' && status !== 'pending-approval' && status !== 'suspended') {
+        const webhookAccessSuspended = body.webhookAccessSuspended;
+        if (webhookAccessSuspended !== undefined && typeof webhookAccessSuspended !== 'boolean') {
+          json(response, 400, { error: 'Webhook access suspension must be true or false.' });
+          return true;
+        }
+        if (status !== undefined && status !== 'approved' && status !== 'pending-approval' && status !== 'suspended') {
           json(response, 400, { error: 'Choose approved, pending-approval, or suspended.' });
           return true;
         }
-        const account = await this.accounts.updateAccount(match[1]!, { status: status as AccountStatus });
-        if (account) logger.info({ action: 'audience-account-status-updated', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id, status }, 'Audience account status updated');
+        if (status === undefined && webhookAccessSuspended === undefined) {
+          json(response, 400, { error: 'Provide an account status or webhookAccessSuspended value.' });
+          return true;
+        }
+        let account = status !== undefined ? await this.accounts.updateAccount(match[1]!, { status: status as AccountStatus }) : this.accounts.listAdminAccounts().find((item) => item.id === match[1]!);
+        if (webhookAccessSuspended !== undefined) account = await this.accounts.setWebhookAccessSuspended(match[1]!, webhookAccessSuspended as boolean);
+        if (account && status !== undefined) logger.info({ action: 'audience-account-status-updated', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id, status }, 'Audience account status updated');
+        if (account && webhookAccessSuspended !== undefined) logger.warn({ action: webhookAccessSuspended ? 'audience-webhook-access-suspended' : 'audience-webhook-access-restored', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id }, 'Audience account webhook access changed');
         json(response, account ? 200 : 404, account ? { account } : { error: 'Account not found.' });
       } catch (error) {
         json(response, 400, { error: error instanceof Error ? error.message : 'Invalid request body.' });
@@ -1267,19 +1347,6 @@ function verificationEmailHtml(firstName: string, accountType: AudienceAccountTy
 
 function headerValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value.join(',') : value ?? '';
-}
-
-function validateWebhookUrl(value: string): string | undefined {
-  if (value.length > 2_000) return undefined;
-  try {
-    const url = new URL(value.trim());
-    const host = url.hostname.toLowerCase().replace(/\.$/, '');
-    if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.search || isIP(host)) return undefined;
-    if (url.port && url.port !== '443') return undefined;
-    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) return undefined;
-    if (!host.includes('.') || host.split('.').some((label) => !label || label.startsWith('-') || label.endsWith('-'))) return undefined;
-    return url.toString();
-  } catch { return undefined; }
 }
 
 function renderIncidentShareHtml(
