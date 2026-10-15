@@ -96,6 +96,7 @@ export class DashboardServer {
   private readonly eventClients = new Set<ServerResponse>();
   private unsubscribeIncidentChanges?: () => void;
   private unsubscribeLiveCallChanges?: () => void;
+  private unsubscribeFeedStatusChanges?: () => void;
   private readonly authRateLimits = new Map<string, { count: number; resetsAt: number }>();
   private readonly activePresence = new ActivePresence();
   private pendingIncidentProvider?: () => Array<Record<string, unknown>>;
@@ -136,6 +137,9 @@ export class DashboardServer {
     });
     this.unsubscribeLiveCallChanges = this.store.onLiveCallChange(() => {
       for (const client of this.eventClients) client.write('event: live-calls-updated\ndata: {}\n\n');
+    });
+    this.unsubscribeFeedStatusChanges = this.store.onFeedStatusChange(() => {
+      for (const client of this.eventClients) client.write('event: feeds-updated\ndata: {}\n\n');
     });
     this.server = createServer(async (request, response) => {
       const cspNonce = randomUUID().replaceAll('-', '');
@@ -351,6 +355,8 @@ export class DashboardServer {
     this.unsubscribeIncidentChanges = undefined;
     this.unsubscribeLiveCallChanges?.();
     this.unsubscribeLiveCallChanges = undefined;
+    this.unsubscribeFeedStatusChanges?.();
+    this.unsubscribeFeedStatusChanges = undefined;
     for (const client of this.eventClients) client.end();
     this.eventClients.clear();
     const server = this.server;

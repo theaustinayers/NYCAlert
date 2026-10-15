@@ -6,7 +6,8 @@ const state = {
   tickerFeaturedIncident: null, tickerFeaturedUntil: 0, tickerFeaturedTimer: null,
   map: null, mapLayer: null, mapMarkers: new Map(), mapHasFitBounds: false, mapTimer: null, mapExpiryTimer: null, mapEvents: null,
   mapRefreshTimer: null, mapRefreshSequence: 0, liveUpdates: null, authSession: null, pendingAudience: null,
-  preferenceSaveTimer: null, preferenceSaveQueue: Promise.resolve(), applyingPreferences: false, presenceTimer: null
+  preferenceSaveTimer: null, preferenceSaveQueue: Promise.resolve(), applyingPreferences: false, presenceTimer: null,
+  feedMeterTargets: new Map(), feedMeterAnimationFrame: 0, lastFeedMeterFrameAt: 0
 };
 const voteDeviceId = getVoteDeviceId();
 const presenceBrowserToken = getPresenceBrowserToken();
@@ -153,18 +154,31 @@ function renderFeeds() {
     const alertSeverity = alertActive ? feed.alertSeverity : undefined;
     const alertClass = alertSeverity === 'breaking' ? ' feed-alert-breaking' : alertSeverity === 'newsworthy' ? ' feed-alert-newsworthy' : '';
     const bars = (Array.isArray(meterLevels) ? meterLevels : Array.from({ length: 40 }, () => 0)).slice(-40);
-    const meter = bars.map((level) => `<span class="feed-meter-bar" style="--meter-level:${Math.round(Math.max(0, Math.min(1, Number(level) || 0)) * 100)}%"></span>`).join('');
+    const meter = bars.map(() => '<span class="feed-meter-bar" data-feed-meter-bar></span>').join('');
     return `
     <article class="feed-card${alertClass}" data-feed-id="${escapeHtml(feed.id)}"${alertSeverity ? ` data-alert-severity="${alertSeverity}"` : ''}>
       <div class="feed-top"><span class="agency-tag ${feed.agency === 'NYPD' ? 'nypd' : ''}">${escapeHtml(feed.agency)}</span><span class="feed-state ${escapeHtml(feed.state)}"><i class="health-dot ${escapeHtml(feed.state)}"></i>${stateLabel}</span></div>
       <div class="feed-name">${escapeHtml(feed.name)}</div>
       <div class="feed-location">${escapeHtml(feed.borough)}</div>
-      <div class="feed-meter-wrap"><div class="feed-meter${syntheticWaveActive ? ' feed-meter-active' : ''}" role="img" aria-label="${meterLabel}">${meter}</div>${pcmHasSignal ? `<span class="feed-meter-label">${meterLabel}</span>` : ''}</div>
+      <div class="feed-meter-wrap"><div class="feed-meter${syntheticWaveActive ? ' feed-meter-active' : ''}" data-preserve-node="feed-meter" role="img" aria-label="${meterLabel}">${meter}</div>${pcmHasSignal ? `<span class="feed-meter-label">${meterLabel}</span>` : ''}</div>
       <div class="feed-metrics"><div class="feed-metric"><span>CALLS SEEN</span><strong>${Number(feed.callsSeen) || 0}</strong></div><div class="feed-metric"><span>${isFdny ? 'LAST CALL' : 'LAST AUDIO'}</span><strong class="${activityAt && isRecent(activityAt) ? 'recent' : ''}">${activityText}</strong></div></div>
       ${feed.lastError ? `<span class="feed-error">${escapeHtml(feed.lastError)}</span>` : ''}
     </article>`;
   });
   syncKeyedArticles($('#feed-list'), cards, 'data-feed-id');
+  const activeFeedIds = new Set(state.feeds.filter((feed) => state.boroughs.size > 0 && (feed.borough === 'Citywide' || state.boroughs.has(feed.borough))).map((feed) => String(feed.id)));
+  for (const feed of state.feeds) {
+    const isFdny = feed.agency === 'FDNY';
+    const activityAt = feed.callActivityAt || (isFdny ? feed.lastActivityAt : undefined);
+    const age = activityAt ? Date.now() - Date.parse(activityAt) : Number.POSITIVE_INFINITY;
+    const callActive = age >= 0 && age < 20_000;
+    const pcmLevels = Array.isArray(feed.audioLevels) ? feed.audioLevels.map((level) => Math.max(0, Math.min(1, Number(level) || 0))) : [];
+    const pcmHasSignal = feed.meterSource === 'pcm' && pcmLevels.some((level) => level > 0);
+    const levels = pcmHasSignal ? pcmLevels : callActive ? buildSyntheticCallWave(feed.id, Date.now()) : Array.from({ length: 48 }, () => 0);
+    state.feedMeterTargets.set(String(feed.id), { levels: levels.slice(-40), callActive: !pcmHasSignal && callActive });
+  }
+  for (const feedId of state.feedMeterTargets.keys()) if (!activeFeedIds.has(feedId)) state.feedMeterTargets.delete(feedId);
+  startFeedMeterAnimation();
 }
 
 function syncKeyedArticles(container, markup, keyAttribute, leadingMarkup = '') {
@@ -180,15 +194,23 @@ function syncKeyedArticles(container, markup, keyAttribute, leadingMarkup = '') 
     const existing = key ? previous.get(key) : undefined;
     if (existing) {
       previous.delete(key);
-      if (existing.outerHTML !== incoming.outerHTML) {
+      if (comparableCardMarkup(existing) !== comparableCardMarkup(incoming)) {
         const openDetails = [...existing.querySelectorAll('details')].map((item) => item.open);
         const oldAudio = existing.querySelector('audio');
+        const preservedNodes = [...existing.querySelectorAll('[data-preserve-node]')].map((node) => [node.getAttribute('data-preserve-node'), node]);
         existing.className = incoming.className;
         for (const attribute of [...existing.attributes]) {
           if (attribute.name !== keyAttribute) existing.removeAttribute(attribute.name);
         }
         for (const attribute of [...incoming.attributes]) existing.setAttribute(attribute.name, attribute.value);
         existing.innerHTML = incoming.innerHTML;
+        for (const [preserveKey, oldNode] of preservedNodes) {
+          const newNode = existing.querySelector(`[data-preserve-node="${preserveKey}"]`);
+          if (!newNode || !(oldNode instanceof Element)) continue;
+          oldNode.className = newNode.className;
+          if (newNode instanceof HTMLElement && oldNode instanceof HTMLElement) oldNode.setAttribute('aria-label', newNode.getAttribute('aria-label') ?? '');
+          newNode.replaceWith(oldNode);
+        }
         existing.querySelectorAll('details').forEach((item, index) => { item.open = openDetails[index] ?? false; });
         const newAudio = existing.querySelector('audio');
         if (oldAudio && newAudio && oldAudio.getAttribute('src') === newAudio.getAttribute('src')) newAudio.replaceWith(oldAudio);
@@ -208,6 +230,36 @@ function syncKeyedArticles(container, markup, keyAttribute, leadingMarkup = '') 
     container.dataset.leadingMarkup = leading;
   }
   for (const article of ordered) container.appendChild(article);
+}
+
+function animateFeedMeters(timestamp = performance.now()) {
+  state.feedMeterAnimationFrame = requestAnimationFrame(animateFeedMeters);
+  const elapsed = state.lastFeedMeterFrameAt ? Math.min(100, timestamp - state.lastFeedMeterFrameAt) : 16;
+  state.lastFeedMeterFrameAt = timestamp;
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const smoothing = reducedMotion ? 1 : 1 - Math.exp(-elapsed / 180);
+  for (const card of $('#feed-list').querySelectorAll('.feed-card[data-feed-id]')) {
+    const target = state.feedMeterTargets.get(card.dataset.feedId);
+    const bars = card.querySelectorAll('[data-feed-meter-bar]');
+    if (!target || bars.length === 0) continue;
+    bars.forEach((bar, index) => {
+      const wanted = target.levels[index] ?? 0;
+      const current = Number(bar.dataset.level) || 0;
+      const next = reducedMotion ? wanted : current + (wanted - current) * smoothing;
+      bar.dataset.level = String(next);
+      bar.style.setProperty('--meter-level', `${Math.max(0, Math.min(1, next)) * 100}%`);
+    });
+  }
+}
+
+function startFeedMeterAnimation() {
+  if (!state.feedMeterAnimationFrame) state.feedMeterAnimationFrame = requestAnimationFrame(animateFeedMeters);
+}
+
+function comparableCardMarkup(element) {
+  const copy = element.cloneNode(true);
+  copy.querySelectorAll('[data-preserve-node]').forEach((node) => { node.textContent = ''; });
+  return copy.outerHTML;
 }
 
 function buildSyntheticCallWave(seedValue, now = Date.now()) {
@@ -609,6 +661,7 @@ function initializeLiveUpdates() {
     scheduleMapRefresh();
   });
   events.addEventListener('live-calls-updated', () => { void refreshLiveCalls(); });
+  events.addEventListener('feeds-updated', () => { void refreshFeedTelemetry(); });
   events.addEventListener('open', () => {
     $('#system-state').textContent = 'ONLINE';
     scheduleMapRefresh();

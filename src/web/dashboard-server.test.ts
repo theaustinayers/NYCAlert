@@ -388,18 +388,21 @@ describe('DashboardServer account routes', () => {
         transcript: 'Engine 1 responding.', category: 'routine', summary: 'Routine unit response.',
         confidence: 0.8, newsworthinessScore: 1
       });
+      dashboardStore.recordFeedCallActivity('FDNY', 'Manhattan');
+      dashboardStore.setFeedCallAlert('FDNY', 'Manhattan', 'newsworthy');
       await dashboardStore.publish({
         title: 'Test Fire', summary: 'A test event.', occurredAt: new Date(), agency: 'FDNY', borough: 'Manhattan',
         category: 'newsworthy', location: '123 Main Street', latitude: 40.75, longitude: -73.98,
         confidence: 0.9, newsworthinessScore: 4
       });
       let received = '';
-      for (let attempt = 0; attempt < 5 && (!received.includes('event: live-calls-updated') || !received.includes('event: incidents-updated')); attempt += 1) {
+      for (let attempt = 0; attempt < 5 && (!received.includes('event: live-calls-updated') || !received.includes('event: feeds-updated') || !received.includes('event: incidents-updated')); attempt += 1) {
         const chunk = await reader.read();
         if (chunk.done) break;
         received += new TextDecoder().decode(chunk.value);
       }
       assert.match(received, /event: live-calls-updated/);
+      assert.match(received, /event: feeds-updated/);
       assert.match(received, /event: incidents-updated/);
       await reader.cancel();
     } finally {

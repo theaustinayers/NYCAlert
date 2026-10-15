@@ -268,9 +268,6 @@ export class CallProcessor {
       headline: curateIncidentHeadline(analyzedTriage.headline, transcript, call.agency)
     };
     this.dashboard.recordFeedCallActivity(call.agency, call.borough);
-    if (triage.category === 'newsworthy' || triage.category === 'breaking') {
-      this.dashboard.setFeedCallAlert(call.agency, call.borough, triage.category);
-    }
     trace.headline = triage.headline;
     trace.summary = triage.summary;
     trace.category = triage.category;
@@ -342,24 +339,33 @@ export class CallProcessor {
     const incidentBorough = explicitLocationBorough && coordinates ? explicitLocationBorough : call.borough;
     const effectiveCall: RadioCall = { ...call, borough: incidentBorough };
     const unresolvedBoroughConflict = Boolean(explicitLocationBorough && explicitLocationBorough !== call.borough && !coordinates);
-    const recordLiveCall = () => this.dashboard.recordLiveCall({
-      sourceId: call.id,
-      groupName: call.groupName,
-      occurredAt: call.occurredAt,
-      agency: call.agency,
-      borough: incidentBorough,
-      transcript,
-      category: triage.category,
-      incidentType: triage.incidentType,
-      location: triage.location,
-      summary: triage.summary,
-      confidence: triage.confidence,
-      newsworthinessScore: triage.newsworthinessScore,
-      buffInterestScore: triage.buffInterestScore,
-      assignmentDeskScore: triage.assignmentDeskScore,
-      unitAssignments,
-      boxNumbers
-    });
+    const recordLiveCall = async () => {
+      const liveCall = await this.dashboard.recordLiveCall({
+        sourceId: call.id,
+        groupName: call.groupName,
+        occurredAt: call.occurredAt,
+        agency: call.agency,
+        borough: incidentBorough,
+        transcript,
+        headline: triage.headline,
+        category: triage.category,
+        incidentType: triage.incidentType,
+        location: triage.location,
+        summary: triage.summary,
+        confidence: triage.confidence,
+        newsworthinessScore: triage.newsworthinessScore,
+        buffInterestScore: triage.buffInterestScore,
+        assignmentDeskScore: triage.assignmentDeskScore,
+        unitAssignments,
+        boxNumbers
+      });
+      if (triage.confidence >= this.minTriageConfidence
+        && (triage.category === 'newsworthy' || triage.category === 'breaking')) {
+        // Highlight the channel that delivered this saved call, not its resolved incident borough.
+        this.dashboard.setFeedCallAlert(call.agency, call.borough, triage.category);
+      }
+      return liveCall;
+    };
     const callSubscriptions = this.store.listForCall(effectiveCall);
     const eligibleSubscriptions = callSubscriptions.filter((subscription) =>
       subscriptionAudience(subscription) === 'buff' ? buffQualified

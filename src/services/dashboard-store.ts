@@ -147,6 +147,7 @@ export class DashboardStore {
   private feedStatusProvider?: () => BroadcastifyFeedStatus[];
   private readonly incidentChangeListeners = new Set<() => void>();
   private readonly liveCallChangeListeners = new Set<() => void>();
+  private readonly feedStatusChangeListeners = new Set<() => void>();
   private readonly feedAlerts = new Map<string, { severity: 'newsworthy' | 'breaking'; until: number }>();
   private readonly feedCallActivity = new Map<string, number[]>();
   private readonly pipelineDiagnostics = new Map<string, PipelineDiagnostics>([['calls-api', {
@@ -196,6 +197,7 @@ export class DashboardStore {
     const activity = (this.feedCallActivity.get(key) ?? []).filter((timestamp) => timestamp > occurredAt - 5 * 60_000);
     activity.push(occurredAt);
     this.feedCallActivity.set(key, activity.slice(-200));
+    this.notifyFeedStatusChange();
   }
 
   setFeedCallAlert(agency: Agency, borough: Borough | 'Citywide', severity: 'newsworthy' | 'breaking', now = Date.now()): void {
@@ -207,6 +209,7 @@ export class DashboardStore {
       severity: current?.until && current.until > now && current.severity === 'breaking' ? 'breaking' : severity,
       until: Math.max(current?.until ?? 0, requestedUntil)
     });
+    this.notifyFeedStatusChange();
   }
 
   setPipelineDiagnostics(diagnostics: PipelineDiagnostics, pipeline = 'calls-api'): void {
@@ -225,6 +228,15 @@ export class DashboardStore {
   onLiveCallChange(listener: () => void): () => void {
     this.liveCallChangeListeners.add(listener);
     return () => this.liveCallChangeListeners.delete(listener);
+  }
+
+  onFeedStatusChange(listener: () => void): () => void {
+    this.feedStatusChangeListeners.add(listener);
+    return () => this.feedStatusChangeListeners.delete(listener);
+  }
+
+  private notifyFeedStatusChange(): void {
+    for (const listener of this.feedStatusChangeListeners) listener();
   }
 
   async recordLiveCall(input: DashboardLiveCallInput): Promise<DashboardLiveCall> {

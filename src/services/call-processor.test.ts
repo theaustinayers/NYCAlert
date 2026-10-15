@@ -195,6 +195,36 @@ describe('CallProcessor', () => {
     assert.ok(events.some((event) => event.disposition === 'below-audience-threshold-or-routine'));
   });
 
+  it('flashes a source feed only after a confident non-routine call is saved to Live Radio', async () => {
+    for (const scenario of [
+      { category: 'newsworthy', confidence: 0.9, score: 3, location: undefined, flashes: true },
+      { category: 'breaking', confidence: 0.9, score: 3, location: undefined, flashes: true },
+      { category: 'newsworthy', confidence: 0.5, score: 3, location: undefined, flashes: false },
+      { category: 'routine', confidence: 0.99, score: 1, location: undefined, flashes: false },
+      { category: 'newsworthy', confidence: 0.9, score: 4, location: undefined, flashes: false }
+    ] as const) {
+      const dashboard = new DashboardStore(false);
+      dashboard.setFeedStatusProvider(() => [{
+        id: 'source-bronx', name: 'Bronx Dispatch', agency: 'FDNY', borough: 'Bronx', state: 'online', callsSeen: 1
+      }]);
+      const analysis: CallAnalysisProvider = {
+        async transcribe() { throw new Error('Provided transcript should be used'); },
+        async triage() { return {
+          shouldAlert: scenario.category !== 'routine', category: scenario.category,
+          summary: 'Radio report for test.', confidence: scenario.confidence,
+          newsworthinessScore: scenario.score, location: scenario.location
+        }; }
+      };
+      const processor = new CallProcessor({} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard);
+      await processor.process({
+        id: 'source-alert-test', agency: 'FDNY', borough: 'Bronx', occurredAt: new Date(),
+        transcript: 'Radio report from the Bronx channel.'
+      });
+      assert.equal(Boolean(dashboard.getFeedStatuses()[0]?.alertSeverity), scenario.flashes);
+      if (scenario.flashes) assert.equal(dashboard.listLiveCalls().length, 1);
+    }
+  });
+
   it('downloads incident audio only after triage qualifies an incident', async () => {
     let audioLoads = 0;
     const audioPath = join(testDirectory, 'incident-only.mp3');
@@ -348,6 +378,47 @@ describe('CallProcessor', () => {
     assert.equal(incidents[0]?.updateCount, 2);
     assert.equal(incidents[0]?.updates[1]?.headline, 'Fire Under Control');
     assert.equal(processor.listPendingIncidents().length, 0);
+  });
+
+  it('flashes a feed only after a Newsworthy call is recorded in Live Radio, not for a private pending report', async () => {
+    const dashboard = new DashboardStore(false);
+    dashboard.setFeedStatusProvider(() => [{
+      id: 'fdny-queens', name: 'FDNY Queens', agency: 'FDNY', borough: 'Queens', state: 'online', callsSeen: 0
+    }]);
+    let triageCount = 0;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Broadcastify transcript is supplied'); },
+      async triage() {
+        triageCount += 1;
+        return triageCount === 1
+          ? { shouldAlert: false, category: 'newsworthy', headline: 'Smoke Investigation', summary: 'Smoke investigation reported.', location: 'Queens', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 2 }
+          : { shouldAlert: true, category: 'breaking', headline: 'Reported Structure Fire', summary: 'Structure fire reported.', incidentType: 'fire', confidence: 0.95, newsworthinessScore: 5 };
+      }
+    };
+    const processor = new CallProcessor({} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, analysis, dashboard);
+
+    await processor.process({
+      id: 'visible-newsworthy-call', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(), transcript: 'Smoke investigation in Queens.'
+    });
+    assert.equal(dashboard.listLiveCalls().length, 1);
+    assert.equal(dashboard.getFeedStatuses()[0]?.alertSeverity, 'newsworthy');
+
+    const pendingDashboard = new DashboardStore(false);
+    pendingDashboard.setFeedStatusProvider(() => [{
+      id: 'fdny-bronx', name: 'FDNY Bronx', agency: 'FDNY', borough: 'Bronx', state: 'online', callsSeen: 0
+    }]);
+    const pendingProcessor = new CallProcessor({} as Client, { listForCall: () => [] } as unknown as SubscriptionStore, {
+      async transcribe() { throw new Error('Broadcastify transcript is supplied'); },
+      async triage() {
+        return { shouldAlert: true, category: 'breaking', headline: 'Reported Structure Fire', summary: 'Structure fire reported.', incidentType: 'fire', confidence: 0.95, newsworthinessScore: 5 };
+      }
+    }, pendingDashboard);
+    await pendingProcessor.process({
+      id: 'private-pending-call', agency: 'FDNY', borough: 'Bronx', occurredAt: new Date(), transcript: 'Structure fire, location unclear.'
+    });
+    assert.equal(pendingProcessor.listPendingIncidents().length, 1);
+    assert.equal(pendingDashboard.listLiveCalls().length, 0);
+    assert.equal(pendingDashboard.getFeedStatuses()[0]?.alertSeverity, undefined);
   });
 
   it('groups corroborating EDP train-car fire reports when one transcript only names the borough', async () => {
