@@ -130,19 +130,15 @@ function renderFeeds() {
     .map((feed) => {
     const streamDataAt = feed.lastStreamDataAt;
     const activityAt = streamDataAt || feed.lastActivityAt;
-    const isNypdStream = feed.id?.startsWith('nypd-static-');
-    const activityText = activityAt && isRecent(activityAt)
-      ? `${streamDataAt ? 'STREAM DATA' : 'AUDIO'} ${escapeHtml(timeAgo(activityAt))}`
-      : isNypdStream && feed.state === 'online'
-        ? 'WAITING FOR STREAM DATA'
-        : 'NO AUDIO ACTIVITY · 30 MIN';
+    const stateLabel = feed.state === 'online' ? 'ONLINE'
+      : feed.state === 'offline' ? 'OFFLINE' : 'NOT MONITORED';
+    const activityText = activityAt ? `Audio ${escapeHtml(timeAgo(activityAt))}` : 'No audio yet';
     return `
     <article class="feed-card">
-      <div class="feed-top"><span class="agency-tag ${feed.agency === 'NYPD' ? 'nypd' : ''}">${escapeHtml(feed.agency)}</span><span class="feed-type">${feed.state === 'unknown' ? 'REFERENCE' : 'MONITORED'}</span></div>
+      <div class="feed-top"><span class="agency-tag ${feed.agency === 'NYPD' ? 'nypd' : ''}">${escapeHtml(feed.agency)}</span><span class="feed-state ${escapeHtml(feed.state)}"><i class="health-dot ${escapeHtml(feed.state)}"></i>${stateLabel}</span></div>
       <div class="feed-name">${escapeHtml(feed.name)}</div>
-      <div class="feed-bottom"><span class="feed-location">${escapeHtml(feed.borough)}</span>${feed.url ? `<a class="listen-link" href="${escapeHtml(feed.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(feed.name)} on Broadcastify"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5a.7.7 0 0 1 1.05-.61l6.1 3.5a.7.7 0 0 1 0 1.22l-6.1 3.5A.7.7 0 0 1 5 10.5z"/></svg> LISTEN ↗</a>` : '<span class="listen-link disabled">SERVER STREAM</span>'}</div>
-      <div class="feed-health"><i class="health-dot ${escapeHtml(feed.state)}"></i><span class="health-label">${feed.state === 'unknown' ? 'NOT MONITORED' : escapeHtml(feed.state.toUpperCase())}</span><span>· ${Number(feed.callsSeen) || 0} CALLS</span></div>
-      <span class="feed-activity ${activityAt && isRecent(activityAt) ? 'recent' : ''}"><i class="activity-dot ${activityAt && isRecent(activityAt) ? 'active' : ''}"></i> ${activityText}</span>
+      <div class="feed-location">${escapeHtml(feed.borough)}</div>
+      <div class="feed-metrics"><div class="feed-metric"><span>CALLS SEEN</span><strong>${Number(feed.callsSeen) || 0}</strong></div><div class="feed-metric"><span>LAST AUDIO</span><strong class="${activityAt && isRecent(activityAt) ? 'recent' : ''}">${activityText}</strong></div></div>
       ${feed.lastError ? `<span class="feed-error">${escapeHtml(feed.lastError)}</span>` : ''}
     </article>`;
   }).join('');

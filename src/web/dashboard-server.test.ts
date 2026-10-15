@@ -76,7 +76,12 @@ describe('DashboardServer account routes', () => {
     try {
       const home = await fetch(`${origin}/`);
       assert.equal(home.status, 200);
-      assert.match(await home.text(), /href="https:\/\/discord\.gg\/gcfCBkMG8C"[^>]*>Join Our Discord<\/a>/);
+      const homeHtml = await home.text();
+      assert.match(homeHtml, /href="https:\/\/discord\.gg\/gcfCBkMG8C"[^>]*>Join Our Discord<\/a>/);
+      assert.match(homeHtml, /<span class="stat-label">MONITORING<\/span>/);
+      assert.match(homeHtml, /<span class="stat-caption">AI-SELECTED SUMMARIES ONLY<\/span>/);
+      assert.match(homeHtml, /DISCORD COMMUNITY<\/span><strong>1,800\+<\/strong>/);
+      assert.doesNotMatch(homeHtml, /class="listen-link"|LISTEN ↗/);
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
