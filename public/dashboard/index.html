@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#000000">
-  <meta name="description" content="NYC Alert — AI-assisted New York City public safety incident notifications and dispatch updates.">
+  <meta name="description" content="The city never sleeps. Follow the calls, units, and action in real-time.">
   <link rel="canonical" href="https://nycalert.ai/">
   <link rel="icon" type="image/svg+xml" href="/logo.svg">
   <meta property="og:title" content="NYC Alert — Public Safety Desk">
-  <meta property="og:description" content="AI-assisted New York City public safety incident notifications and dispatch updates.">
+  <meta property="og:description" content="The city never sleeps. Follow the calls, units, and action in real-time.">
   <meta property="og:url" content="https://nycalert.ai/">
   <title>NYC Alert — Public Safety Desk</title>
   <link rel="stylesheet" href="/app.css">
@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="/leaflet.css">
   <link rel="stylesheet" href="/mobile.css">
   <script src="/leaflet.js" defer></script>
-  <script src="/app.js?v=dashboard-20261013-2" defer></script>
+  <script src="/app.js?v=dashboard-20261014-tagline1" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -31,7 +31,7 @@
       </a>
       <div class="incident-ticker" id="incident-ticker" role="status" aria-live="polite"><span class="ticker-live-dot"></span><strong id="incident-ticker-label">INCIDENT:</strong><span id="incident-ticker-text">Waiting for recent incidents…</span></div>
       <a class="donate-button" href="https://buymeacoffee.com/nycalert" target="_blank" rel="noopener noreferrer" aria-label="Donate to NYC Alert on Buy Me a Coffee">☕ <span>Donate</span></a>
-      <a class="invite-button" id="invite-discord" href="https://discord.gg/EgkhPSZqtN" target="_blank" rel="noopener noreferrer" aria-label="Join Our Discord community">Join Our Discord</a>
+      <a class="invite-button" id="invite-discord" href="https://discord.gg/gcfCBkMG8C" target="_blank" rel="noopener noreferrer" aria-label="Join Our Discord community">Join Our Discord</a>
       <div class="account-actions" id="account-actions"><button class="account-button" id="auth-login" type="button">Log in</button><button class="account-button account-button-primary" id="auth-register" type="button">Register</button><span id="signed-in-actions" hidden><span class="account-name" id="account-name"></span><a class="account-button" id="admin-dashboard" href="/admin" hidden>Admin dashboard</a><button class="account-button" id="auth-logout" type="button">Log out</button></span></div>
       <div class="topbar-right"><span class="system-state"><i></i><span id="system-state">CONNECTING</span></span><span class="top-divider"></span><time id="clock">--:--:-- ET</time><span class="top-date" id="date-label">NEW YORK</span></div>
     </header>
@@ -64,15 +64,15 @@
       <section class="main-panel">
         <div class="dashboard-center">
         <div class="page-intro">
-          <div class="page-intro-brand"><div class="eyebrow" id="page-eyebrow">NYCALERT.AI · NEW YORK CITY</div><img class="homepage-wordmark" id="page-title" src="/nyc-alert-wordmark.svg" alt="NYC Alert" width="1200" height="270"><p id="page-description">Curated, AI-reviewed call highlights. Routine traffic stays off the board.</p></div>
+          <div class="page-intro-brand"><div class="eyebrow" id="page-eyebrow">NYCALERT.AI · NEW YORK CITY</div><img class="homepage-wordmark" id="page-title" src="/nyc-alert-wordmark.svg" alt="NYC Alert" width="1200" height="270"><p id="page-description">The city never sleeps. Follow the calls, units, and action in real-time.</p></div>
           <div class="intro-badge"><span class="pulse-ring"><i></i></span><div><b>AI TRIAGE</b><small>QUALIFIED EVENTS ONLY</small></div></div>
         </div>
 
         <div class="stats-row">
           <article class="stat-card"><span class="stat-label">PUBLISHED INCIDENTS</span><strong id="incident-count">0</strong><span class="stat-caption">in current session</span></article>
           <article class="stat-card"><span class="stat-label">ACTIVE AGENCIES</span><strong>02</strong><span class="stat-caption">FDNY · NYPD</span></article>
-          <article class="stat-card"><span class="stat-label">COVERAGE</span><strong>05<span class="stat-unit"> BOROUGHS</span></strong><span class="stat-caption">CITYWIDE REFERENCES INCLUDED</span></article>
-          <article class="stat-card stat-card-status"><span class="stat-label">PUBLIC FEED</span><strong><span class="status-dot"></span><span id="feed-status">STANDBY</span></strong><span class="stat-caption">AI-selected summaries only</span></article>
+          <article class="stat-card stat-card-status"><span class="stat-label">MONITORING</span><strong><span class="status-dot"></span><span id="feed-status">STANDBY</span></strong><span class="stat-caption">AI-SELECTED SUMMARIES ONLY</span></article>
+          <a class="stat-card stat-discord-card" href="https://discord.gg/gcfCBkMG8C" target="_blank" rel="noopener noreferrer" aria-label="Join the NYC Alert Discord community, over 1,800 members"><span class="stat-label">DISCORD COMMUNITY</span><strong>1,800+</strong><span class="stat-caption">MEMBERS · JOIN THE CONVERSATION ↗</span></a>
         </div>
 
         <section class="incident-map-panel" aria-labelledby="incident-map-title">

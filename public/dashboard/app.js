@@ -38,8 +38,8 @@ function initializeBoroughPage() {
   const label = selected.length === 0 ? 'No boroughs selected' : selected.length === boroughNames.length ? 'New York City' : selected.length === 1 ? selected[0] : `${selected.length} boroughs`;
   $('#page-eyebrow').textContent = `NYCALERT.AI · ${label.toUpperCase()}`;
   $('#page-description').textContent = selected.length === boroughNames.length
-    ? 'Curated, AI-reviewed call highlights. Routine traffic stays off the board.'
-    : selected.length ? `AI-reviewed incidents and radio calls for ${selected.join(', ')}.` : 'Turn on a borough to show its incidents and radio calls.';
+    ? 'The city never sleeps. Follow the calls, units, and action in real-time.'
+    : selected.length ? `The city never sleeps. Follow the calls, units, and action in ${selected.join(', ')} in real-time.` : 'Turn on a borough to follow its calls, units, and action in real-time.';
   $('#incident-map-title').textContent = selected.length === 1 ? `${selected[0]} Incident Map` : selected.length ? 'Incident Map · Selected Boroughs' : 'Incident Map';
   $('#map-description').textContent = selected.length === 1
     ? `Incidents placed in ${selected[0]} during the last 30 minutes.`

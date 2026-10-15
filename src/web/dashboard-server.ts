@@ -995,7 +995,7 @@ function resolveOpenGraphImage(image: string | undefined, publicUrl: string): st
 function renderHomepageShareHtml(html: string, publicUrl: string, settings: SiteSettings): string {
   const title = settings.openGraphTitle || 'NYC Alert — Public Safety Desk';
   const description = settings.openGraphDescription
-    || 'AI-assisted New York City public safety incident notifications and dispatch updates.';
+    || 'The city never sleeps. Follow the calls, units, and action in real-time.';
   const canonicalUrl = new URL('/', publicUrl).toString();
   const imageUrl = resolveOpenGraphImage(settings.openGraphImage, publicUrl);
   const escapeAttribute = (value: string): string => value.replace(/[&<>"']/g, (character) => ({
