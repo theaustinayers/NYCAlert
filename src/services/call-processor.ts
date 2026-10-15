@@ -346,6 +346,7 @@ export class CallProcessor {
       borough: incidentBorough,
       transcript,
       category: triage.category,
+      incidentType: triage.incidentType,
       location: triage.location,
       summary: triage.summary,
       confidence: triage.confidence,

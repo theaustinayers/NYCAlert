@@ -14,6 +14,7 @@ import type { LearningLog } from '../services/learning-log.js';
 import type { DeploymentUpdater } from '../services/deployment-updater.js';
 import type { XIntegrationTester } from '../providers/x-post.js';
 import { isIncidentVote, type IncidentVoteStore } from '../services/incident-vote-store.js';
+import { communityPromotionThreshold, qualifiesForCommunityPromotion } from '../services/community-promotion.js';
 import { logger } from '../logger.js';
 
 export interface DashboardAuthConfig {
@@ -141,6 +142,11 @@ export class DashboardServer {
           await this.handleIncidentVote(request, response, voteRoute[1]!);
           return;
         }
+        const liveCallVoteRoute = /^\/api\/live-calls\/([0-9a-f-]{36})\/vote$/i.exec(url.pathname);
+        if (liveCallVoteRoute && request.method === 'POST') {
+          await this.handleLiveCallVote(request, response, liveCallVoteRoute[1]!);
+          return;
+        }
         if (request.method !== 'GET' && request.method !== 'HEAD') {
           json(response, 405, { error: 'Method not allowed' });
           return;
@@ -235,7 +241,10 @@ export class DashboardServer {
           return;
         }
         if (url.pathname === '/api/live-calls') {
-          json(response, 200, { calls: this.store.listLiveCalls(url.searchParams.get('q') ?? '', selectedBoroughs(url.searchParams)).slice(0, 100) });
+          const deviceId = validVoteDeviceId(url.searchParams.get('deviceId'));
+          const calls = this.store.listLiveCalls(url.searchParams.get('q') ?? '', selectedBoroughs(url.searchParams)).slice(0, 100)
+            .map((call) => ({ ...call, votes: this.incidentVotes?.getLiveCallSummary(call.id, deviceId) ?? { up: 0, down: 0, myVote: null } }));
+          json(response, 200, { calls });
           return;
         }
         const audioMatch = /^\/api\/incidents\/([0-9a-f-]{36})\/audio$/i.exec(url.pathname);
@@ -312,6 +321,37 @@ export class DashboardServer {
   }
 
   private async handleAccountRoutes(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
+    if (url.pathname === '/api/account/preferences') {
+      if (!this.accounts || !this.authConfig) {
+        json(response, 503, { error: 'Account services are not configured on this server.' });
+        return true;
+      }
+      const session = this.accounts.getSession(this.readSessionToken(request));
+      if (!session?.account) {
+        json(response, 401, { error: 'Sign in with an account to save dashboard preferences.' });
+        return true;
+      }
+      if (request.method === 'GET') {
+        json(response, 200, { preferences: session.account.dashboardPreferences ?? null });
+        return true;
+      }
+      if (request.method !== 'PUT') {
+        json(response, 405, { error: 'Method not allowed.' });
+        return true;
+      }
+      if (!this.hasSameOrigin(request)) {
+        json(response, 403, { error: 'Request origin was not accepted.' });
+        return true;
+      }
+      try {
+        const body = await readJsonBody(request);
+        const preferences = await this.accounts.setDashboardPreferences(session.account.id, body.preferences);
+        json(response, 200, { preferences });
+      } catch (error) {
+        json(response, 400, { error: error instanceof Error ? error.message : 'Could not save dashboard preferences.' });
+      }
+      return true;
+    }
     if (url.pathname.startsWith('/api/auth/')) {
       if (!this.accounts || !this.authConfig) {
         json(response, 503, { error: 'Account services are not configured on this server.' });
@@ -891,6 +931,57 @@ export class DashboardServer {
         });
       }
       json(response, 200, { ...result, message: result.accepted ? 'Vote recorded.' : 'This device has already voted on this incident.' });
+    } catch (error) {
+      json(response, 400, { error: error instanceof Error ? error.message : 'Could not record vote.' });
+    }
+  }
+
+  private async handleLiveCallVote(request: IncomingMessage, response: ServerResponse, liveCallId: string): Promise<void> {
+    if (!this.hasSameOrigin(request)) {
+      json(response, 403, { error: 'Request origin was not accepted.' });
+      return;
+    }
+    if (!this.incidentVotes) {
+      json(response, 503, { error: 'Live Radio voting is not configured.' });
+      return;
+    }
+    if (!this.takeRateLimit(request, 'live-call-vote', 20, 60_000)) {
+      json(response, 429, { error: 'Voting is temporarily rate-limited. Try again shortly.' });
+      return;
+    }
+    try {
+      const body = await readJsonBody(request);
+      const deviceId = validVoteDeviceId(body.deviceId);
+      if (!deviceId || !isIncidentVote(body.vote)) {
+        json(response, 400, { error: 'A valid device ID and up/down vote are required.' });
+        return;
+      }
+      const call = this.store.getLiveCall(liveCallId);
+      if (!call) {
+        json(response, 404, { error: 'Live Radio call not found.' });
+        return;
+      }
+      if (call.category === 'routine') {
+        json(response, 400, { error: 'Routine radio traffic is not eligible for votes.' });
+        return;
+      }
+      const result = this.incidentVotes.castLiveCallVote(call, deviceId, body.vote);
+      const shouldPromote = qualifiesForCommunityPromotion(call, result);
+      const promotedIncident = shouldPromote
+        ? await this.store.promoteLiveCallFromCommunity(call.id, result)
+        : undefined;
+      json(response, 200, {
+        ...result,
+        promoted: Boolean(promotedIncident),
+        ...(promotedIncident ? { promotedIncidentId: promotedIncident.id } : {}),
+        promotionProgress: {
+          upvotesNeeded: Math.max(0, communityPromotionThreshold.upvotes - result.up),
+          netVotesNeeded: Math.max(0, communityPromotionThreshold.netVotes - (result.up - result.down))
+        },
+        message: result.accepted
+          ? promotedIncident ? 'Strong community support surfaced this radio report on Latest Incidents.' : 'Vote recorded.'
+          : 'This device has already voted on this radio call.'
+      });
     } catch (error) {
       json(response, 400, { error: error instanceof Error ? error.message : 'Could not record vote.' });
     }

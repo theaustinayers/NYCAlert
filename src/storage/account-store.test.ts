@@ -48,4 +48,26 @@ describe('AccountStore', () => {
     await assert.rejects(store.deleteAdministrator(completed.account.id, completed.account.id), /own administrator/);
     await assert.rejects(store.deleteAdministrator(completed.account.id), /last active administrator/);
   });
+
+  it('persists validated dashboard preferences across account-store reloads', async () => {
+    const directory = join(testDirectory, 'dashboard-preferences');
+    const store = new AccountStore(directory);
+    await store.init();
+    const registered = await store.register({
+      firstName: 'Preference', lastName: 'Tester', email: 'preferences@example.test', phone: '2125550100',
+      usageCase: 'Testing saved dashboard preferences.', accountType: 'news', password: 'Strong-test-password-123'
+    });
+    const saved = await store.setDashboardPreferences(registered.account.id, {
+      boroughs: ['Queens', 'invalid'], audience: 'news', agency: 'NYPD', sortMode: 'newest', view: 'live',
+      liveCategories: ['newsworthy', 'breaking', 'unknown']
+    });
+    assert.deepEqual(saved, {
+      boroughs: ['Queens'], audience: 'news', agency: 'NYPD', sortMode: 'newest', view: 'live',
+      liveCategories: ['newsworthy', 'breaking']
+    });
+
+    const reloaded = new AccountStore(directory);
+    await reloaded.init();
+    assert.deepEqual(reloaded.listAccounts()[0]?.dashboardPreferences, saved);
+  });
 });

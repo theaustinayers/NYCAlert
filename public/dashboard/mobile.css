@@ -61,6 +61,30 @@
   .intro-badge { align-self: flex-start; }
 }
 
+/* Shared dashboard filters and Live Radio curated type selection. */
+.filter-row [hidden] { display: none; }
+.live-filter-row[hidden] { display: none; }
+.live-filter-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 4px; padding: 10px 12px; border: 1px solid #2a3949; border-radius: 8px; background: linear-gradient(110deg, rgba(17, 28, 40, .96), rgba(13, 22, 32, .96)); }
+.live-filter-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.live-filter-label { margin: 0 5px 0 0; color: #75879c; font: 9px var(--mono); letter-spacing: .09em; }
+.live-filter-chip { min-height: 30px; padding: 5px 10px; border: 1px solid #344456; border-radius: 6px; background: #121e2a; color: #a6b5c5; font: 10px var(--sans); cursor: pointer; transition: background .15s, border-color .15s, color .15s; }
+.live-filter-chip:hover { border-color: #527083; color: #e6eef6; }
+.live-filter-chip.active { border-color: #2e7774; background: #123033; color: #a7eeea; box-shadow: inset 0 0 0 1px rgba(98, 214, 208, .06); }
+.live-filter-chip:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.live-filter-count { margin-left: auto; color: #7d8fa4; font: 9px var(--mono); letter-spacing: .06em; white-space: nowrap; }
+.live-call-vote-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px solid #253443; }
+.live-call-vote-caption { display: grid; gap: 3px; color: #9aabbc; font: 9px var(--mono); letter-spacing: .04em; }
+.live-call-vote-caption small { max-width: 52ch; color: #73859a; font: 10px/1.4 var(--sans); letter-spacing: 0; }
+.live-call-vote-controls { display: flex; gap: 6px; }
+.incident-vote-button.selected[data-live-vote="up"] { border-color: #41815f; background: #163126; color: #a8edc2; }
+.incident-vote-button.selected[data-live-vote="down"] { border-color: #80515a; background: #351f24; color: #ffb6bb; }
+.live-call-vote-feedback { flex: 1 1 100%; color: #9edfc1; font: 10px/1.4 var(--sans); }
+.community-selected-note { display: inline-block; margin: 7px 0 0; padding: 5px 7px; border: 1px solid #755f35; border-radius: 4px; background: rgba(117, 95, 53, .14); color: #e5c37c; font: 9px var(--mono); letter-spacing: .05em; }
+@media (max-width: 760px) {
+  .live-filter-row { align-items: flex-start; flex-direction: column; gap: 9px; }
+  .live-filter-count { margin-left: 0; }
+}
+
 /* Keep the multi-action desktop header from wrapping underneath its fixed ticker on phones. */
 @media (max-width: 560px) {
   .topbar {

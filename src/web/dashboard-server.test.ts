@@ -179,6 +179,56 @@ describe('DashboardServer account routes', () => {
     }
   });
 
+  it('saves dashboard preferences only for the authenticated account and same origin', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const accounts = new AccountStore(join(testDirectory, 'saved-dashboard-preferences'));
+    await accounts.init();
+    const registered = await accounts.register({
+      firstName: 'Preference', lastName: 'Tester', email: 'saved-preferences@example.test', phone: '2125550100',
+      usageCase: 'Testing persistent dashboard selections.', accountType: 'news', password: 'Strong-test-password-123'
+    });
+    const verified = await accounts.verifyEmail(registered.verificationToken);
+    await accounts.updateAccount(verified.id, { status: 'approved' });
+    const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
+      publicUrl: origin, trustProxy: true, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+    });
+    await server.start();
+    try {
+      const anonymous = await fetch(`${origin}/api/account/preferences`, {
+        method: 'PUT', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ preferences: {} })
+      });
+      assert.equal(anonymous.status, 401);
+
+      const login = await fetch(`${origin}/api/auth/login`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: verified.email, password: 'Strong-test-password-123' })
+      });
+      assert.equal(login.status, 200);
+      const cookie = login.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(cookie);
+
+      const crossOrigin = await fetch(`${origin}/api/account/preferences`, {
+        method: 'PUT', headers: { Cookie: cookie, Origin: 'https://attacker.example', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferences: { audience: 'public' } })
+      });
+      assert.equal(crossOrigin.status, 403);
+
+      const expected = {
+        boroughs: ['Brooklyn', 'Queens'], audience: 'news', agency: 'FDNY', sortMode: 'priority', view: 'live',
+        liveCategories: ['newsworthy', 'weird_unique']
+      };
+      const saved = await fetch(`${origin}/api/account/preferences`, {
+        method: 'PUT', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferences: expected })
+      });
+      assert.equal(saved.status, 200);
+      assert.deepEqual((await saved.json() as { preferences: unknown }).preferences, expected);
+      const loaded = await fetch(`${origin}/api/account/preferences`, { headers: { Cookie: cookie } });
+      assert.deepEqual((await loaded.json() as { preferences: unknown }).preferences, expected);
+    } finally { await server.stop(); }
+  });
+
   it('allows only same-origin administrators to publish an X test post and returns a diagnostic on failure', async () => {
     const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;
@@ -496,6 +546,52 @@ describe('DashboardServer account routes', () => {
       assert.equal(feedback?.feedbackVote, 'up');
       assert.equal(feedback?.incidentId, incident.id);
       assert.equal(JSON.stringify(feedback).includes(deviceId), false);
+    } finally {
+      await server.stop();
+      voteStore.close();
+    }
+  });
+
+  it('rejects routine Live Radio votes and promotes only a strongly supported non-routine report', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const dashboardStore = new DashboardStore(false);
+    const occurredAt = new Date();
+    const eligibleCall = await dashboardStore.recordLiveCall({
+      sourceId: 'supported-newsworthy-source', occurredAt, agency: 'FDNY', borough: 'Queens',
+      transcript: 'Reported gas odor.', category: 'newsworthy', incidentType: 'other', summary: 'Reported gas odor.',
+      confidence: 0.9, newsworthinessScore: 3
+    });
+    const routineCall = await dashboardStore.recordLiveCall({
+      sourceId: 'routine-source', occurredAt, agency: 'NYPD', borough: 'Citywide',
+      transcript: 'Routine status.', category: 'routine', summary: 'Routine status.', confidence: 0.99, newsworthinessScore: 1
+    });
+    const voteStore = new IncidentVoteStore(join(testDirectory, 'live-call-vote-api'));
+    await voteStore.init();
+    const server = new DashboardServer(dashboardStore, port, '127.0.0.1', undefined, undefined, undefined, undefined, undefined, undefined, undefined, voteStore);
+    await server.start();
+    try {
+      const vote = (callId: string, deviceId: string) => fetch(`${origin}/api/live-calls/${callId}/vote`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, vote: 'up' })
+      });
+      const routineResponse = await vote(routineCall.id, '00000000-0000-4000-8000-000000000001');
+      assert.equal(routineResponse.status, 400);
+      assert.deepEqual(voteStore.getLiveCallSummary(routineCall.id), { up: 0, down: 0, myVote: null });
+
+      let finalVote: Response | undefined;
+      for (let index = 1; index <= 10; index += 1) {
+        finalVote = await vote(eligibleCall.id, `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+        assert.equal(finalVote.status, 200);
+      }
+      const result = await finalVote!.json() as { up: number; down: number; promoted: boolean; promotedIncidentId?: string };
+      assert.equal(result.up, 10);
+      assert.equal(result.down, 0);
+      assert.equal(result.promoted, true);
+      assert.ok(result.promotedIncidentId);
+      const incident = dashboardStore.getIncident(result.promotedIncidentId!);
+      assert.equal(incident?.communitySelected, true);
+      assert.match(incident?.summary ?? '', /not incident verification/);
     } finally {
       await server.stop();
       voteStore.close();

@@ -2,8 +2,22 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Borough } from '../domain/subscriptions.js';
+import { alertCategories, type AlertCategory } from '../domain/triage.js';
 
 export type AudienceAccountType = 'buff' | 'news';
+export type DashboardAudience = 'public' | 'buff' | 'news';
+export type DashboardAgencyFilter = 'all' | 'FDNY' | 'NYPD';
+export type DashboardSortMode = 'smart' | 'newest' | 'priority';
+export type DashboardView = 'incidents' | 'live';
+export type LiveCallCategory = AlertCategory | 'routine';
+export interface DashboardPreferences {
+  boroughs: Borough[];
+  audience: DashboardAudience;
+  agency: DashboardAgencyFilter;
+  sortMode: DashboardSortMode;
+  view: DashboardView;
+  liveCategories: LiveCallCategory[];
+}
 export type AdminRole = 'owner' | 'admin' | 'moderator' | 'reviewer';
 export type AccountStatus = 'pending-verification' | 'pending-approval' | 'approved' | 'suspended';
 export interface AccountWebhook { id: string; name: string; url: string; boroughs: Borough[] | 'all'; }
@@ -25,8 +39,9 @@ export interface AccountRecord {
   verificationTokenHash?: string;
   verificationExpiresAt?: number;
   webhooks: AccountWebhook[];
+  dashboardPreferences?: DashboardPreferences;
 }
-export interface PublicAccount { id: string; firstName: string; lastName: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: Exclude<AdminRole, 'owner'>; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhook[]; }
+export interface PublicAccount { id: string; firstName: string; lastName: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: Exclude<AdminRole, 'owner'>; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhook[]; dashboardPreferences?: DashboardPreferences; }
 export interface AdminAccount extends PublicAccount { phone: string; usageCase: string; }
 
 const passwordBytes = 64;
@@ -234,6 +249,15 @@ export class AccountStore {
     return account.webhooks;
   }
 
+  async setDashboardPreferences(accountId: string, value: unknown): Promise<DashboardPreferences> {
+    const account = this.accounts.find((item) => item.id === accountId);
+    if (!account) throw new Error('Account not found.');
+    const preferences = normalizeDashboardPreferences(value);
+    account.dashboardPreferences = preferences;
+    await this.persist();
+    return preferences;
+  }
+
   async addAccountWebhook(accountId: string, webhook: AccountWebhook): Promise<AccountWebhook[]> {
     const account = this.accounts.find((item) => item.id === accountId && !item.isAdmin && item.status === 'approved' && item.emailVerifiedAt);
     if (!account) throw new Error('An approved audience account is required to assign a webhook.');
@@ -265,7 +289,7 @@ export class AccountStore {
 
   private publicView(account: AccountRecord): PublicAccount {
     const { id, firstName, lastName, email, accountType, isAdmin, adminRole, status, emailVerifiedAt, createdAt, webhooks } = account;
-    return { id, firstName, lastName, email, accountType, isAdmin: Boolean(isAdmin), ...(isAdmin ? { adminRole: adminRole ?? 'admin' } : {}), status, emailVerified: Boolean(emailVerifiedAt), createdAt, webhooks };
+    return { id, firstName, lastName, email, accountType, isAdmin: Boolean(isAdmin), ...(isAdmin ? { adminRole: adminRole ?? 'admin' } : {}), status, emailVerified: Boolean(emailVerifiedAt), createdAt, webhooks, ...(account.dashboardPreferences ? { dashboardPreferences: { ...account.dashboardPreferences, boroughs: [...account.dashboardPreferences.boroughs], liveCategories: [...account.dashboardPreferences.liveCategories] } } : {}) };
   }
 
   private async persist(): Promise<void> {
@@ -278,6 +302,26 @@ export class AccountStore {
     this.persistQueue = next;
     await next;
   }
+}
+
+const validBoroughs: Borough[] = ['Manhattan', 'Bronx', 'Queens', 'Brooklyn', 'Staten Island'];
+
+export function normalizeDashboardPreferences(value: unknown): DashboardPreferences {
+  const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const boroughs = Array.isArray(input.boroughs)
+    ? [...new Set(input.boroughs.filter((item): item is Borough => typeof item === 'string' && validBoroughs.includes(item as Borough)))]
+    : validBoroughs;
+  const categories: LiveCallCategory[] = Array.isArray(input.liveCategories)
+    ? [...new Set(input.liveCategories.filter((item): item is LiveCallCategory => item === 'routine' || alertCategories.includes(item as AlertCategory)))]
+    : ['routine', ...alertCategories];
+  return {
+    boroughs,
+    audience: input.audience === 'buff' || input.audience === 'news' ? input.audience : 'public',
+    agency: input.agency === 'FDNY' || input.agency === 'NYPD' ? input.agency : 'all',
+    sortMode: input.sortMode === 'newest' || input.sortMode === 'priority' ? input.sortMode : 'smart',
+    view: input.view === 'live' ? 'live' : 'incidents',
+    liveCategories: categories
+  };
 }
 
 function safeEqual(left: string, right: string): boolean {

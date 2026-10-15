@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { DashboardIncident } from './dashboard-store.js';
+import type { DashboardIncident, DashboardLiveCall } from './dashboard-store.js';
 
 export type IncidentVote = 'up' | 'down';
 
@@ -84,6 +84,33 @@ export class IncidentVoteStore {
       incident.assignmentDeskScore
     );
     return { ...this.getSummary(incident.id, deviceId), accepted: result.changes === 1 };
+  }
+
+  getLiveCallSummary(liveCallId: string, deviceId?: string): IncidentVoteSummary {
+    return this.getSummary(`live-call:${liveCallId}`, deviceId);
+  }
+
+  castLiveCallVote(call: DashboardLiveCall, deviceId: string, vote: IncidentVote): CastIncidentVoteResult {
+    const database = this.getDatabase();
+    const liveVoteId = `live-call:${call.id}`;
+    const result = database.prepare(`
+      INSERT OR IGNORE INTO incident_votes
+        (incident_id, device_hash, vote, voted_at, agency, borough, incident_type, category, public_score, buff_score, news_score)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      liveVoteId,
+      hashDeviceId(deviceId),
+      vote,
+      new Date().toISOString(),
+      call.agency,
+      call.borough,
+      call.incidentType ?? null,
+      call.category,
+      call.newsworthinessScore,
+      call.buffInterestScore,
+      call.assignmentDeskScore
+    );
+    return { ...this.getSummary(liveVoteId, deviceId), accepted: result.changes === 1 };
   }
 
   close(): void {

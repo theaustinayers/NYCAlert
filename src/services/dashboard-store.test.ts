@@ -122,6 +122,27 @@ describe('DashboardStore', () => {
     assert.equal(updated?.updates[0]?.agency, 'NYPD');
   });
 
+  it('surfaces a community-selected live call once and labels it as unverified', async () => {
+    const store = new DashboardStore(false);
+    const call = await store.recordLiveCall({
+      sourceId: 'community-source-call', occurredAt: input.occurredAt, agency: 'FDNY', borough: 'Queens',
+      transcript: 'Reported gas odor.', category: 'newsworthy', incidentType: 'other', summary: 'Reported gas odor.',
+      confidence: 0.9, newsworthinessScore: 3
+    });
+    const promoted = await store.promoteLiveCallFromCommunity(call.id, { up: 10, down: 2 });
+    const repeated = await store.promoteLiveCallFromCommunity(call.id, { up: 12, down: 2 });
+    assert.equal(promoted?.communitySelected, true);
+    assert.equal(promoted?.communitySourceCallId, call.id);
+    assert.match(promoted?.summary ?? '', /Community support is not incident verification/);
+    assert.equal(repeated?.id, promoted?.id);
+
+    const routine = await store.recordLiveCall({
+      sourceId: 'routine-source-call', occurredAt: input.occurredAt, agency: 'FDNY', borough: 'Queens',
+      transcript: 'Routine status.', category: 'routine', summary: 'Routine status.', confidence: 1, newsworthinessScore: 1
+    });
+    assert.equal(await store.promoteLiveCallFromCommunity(routine.id, { up: 100, down: 0 }), undefined);
+  });
+
   it('upgrades a generic incident title when a follow-up identifies smoke from the roof', async () => {
     const store = new DashboardStore(false);
     const incident = await store.publish({

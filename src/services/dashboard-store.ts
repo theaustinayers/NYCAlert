@@ -27,6 +27,8 @@ export interface DashboardIncidentInput {
   assignmentDeskScore?: number;
   audioPath?: string;
   audioContentType?: string;
+  communitySelected?: boolean;
+  communitySourceCallId?: string;
 }
 
 export interface DashboardIncident {
@@ -54,6 +56,8 @@ export interface DashboardIncident {
   buffInterestScore: number;
   assignmentDeskScore: number;
   hasAudio: boolean;
+  communitySelected?: boolean;
+  communitySourceCallId?: string;
 }
 
 export interface DashboardIncidentUpdateInput {
@@ -87,6 +91,7 @@ export interface DashboardLiveCallInput {
   borough: Borough | 'Citywide';
   transcript: string;
   category: AlertCategory | 'routine';
+  incidentType?: IncidentType;
   location?: string;
   summary: string;
   confidence: number;
@@ -108,6 +113,7 @@ export interface DashboardLiveCall {
   borough: Borough | 'Citywide';
   transcript?: string;
   category: AlertCategory | 'routine';
+  incidentType?: IncidentType;
   location?: string;
   summary: string;
   confidence: number;
@@ -182,6 +188,7 @@ export class DashboardStore {
       ...(this.allowPublicTranscripts && input.location ? { location: input.location.slice(0, 180) } : {}),
       ...(this.allowPublicTranscripts ? { transcript: input.transcript.slice(0, 4_000) } : {}),
       category: input.category,
+      ...(input.incidentType ? { incidentType: input.incidentType } : {}),
       summary: this.allowPublicTranscripts ? input.summary.slice(0, 700) : 'Transcript and call summary display is disabled.',
       confidence: Math.max(0, Math.min(1, input.confidence)),
       newsworthinessScore: Math.max(1, Math.min(5, Math.round(input.newsworthinessScore))),
@@ -209,6 +216,37 @@ export class DashboardStore {
 
   getLiveCallAudio(callId: string): { path: string; contentType: string } | undefined {
     return this.liveCallAudioFiles.get(callId);
+  }
+
+  getLiveCall(callId: string): DashboardLiveCall | undefined {
+    return this.liveCalls.find((call) => call.id === callId);
+  }
+
+  async promoteLiveCallFromCommunity(callId: string, votes: { up: number; down: number }): Promise<DashboardIncident | undefined> {
+    const existing = this.incidents.find((incident) => incident.communitySourceCallId === callId);
+    if (existing) return existing;
+    const call = this.getLiveCall(callId);
+    if (!call || call.category === 'routine') return undefined;
+    return this.publish({
+      title: `${call.agency} radio report selected by community`,
+      headline: `${call.agency} Radio Report · Community Selected`,
+      summary: `Community-selected radio report (${votes.up} upvotes, ${votes.down} downvotes). Community support is not incident verification. ${call.summary}`.slice(0, 700),
+      occurredAt: new Date(call.occurredAt),
+      agency: call.agency,
+      borough: call.borough,
+      category: call.category as AlertCategory,
+      ...(call.location ? { location: call.location } : {}),
+      ...(call.incidentType ? { incidentType: call.incidentType } : {}),
+      unitIds: call.unitAssignments.map((assignment) => assignment.unitId),
+      unitAssignments: call.unitAssignments,
+      boxNumbers: call.boxNumbers,
+      confidence: call.confidence,
+      newsworthinessScore: call.newsworthinessScore,
+      buffInterestScore: call.buffInterestScore,
+      assignmentDeskScore: call.assignmentDeskScore,
+      communitySelected: true,
+      communitySourceCallId: callId
+    });
   }
 
   async publish(input: DashboardIncidentInput): Promise<DashboardIncident> {
@@ -249,7 +287,9 @@ export class DashboardStore {
       newsworthinessScore: Math.max(1, Math.min(5, Math.round(input.newsworthinessScore))),
       buffInterestScore: Math.max(1, Math.min(5, Math.round(input.buffInterestScore ?? input.newsworthinessScore))),
       assignmentDeskScore: Math.max(1, Math.min(5, Math.round(input.assignmentDeskScore ?? input.newsworthinessScore))),
-      hasAudio
+      hasAudio,
+      ...(input.communitySelected ? { communitySelected: true } : {}),
+      ...(input.communitySourceCallId ? { communitySourceCallId: input.communitySourceCallId } : {})
     };
     this.incidents.unshift(incident);
     while (this.incidents.length > this.maxIncidents) {

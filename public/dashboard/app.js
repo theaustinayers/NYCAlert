@@ -1,11 +1,12 @@
 const state = {
-  agency: 'all', query: '', view: 'incidents', sortMode: 'smart', feeds: [], incidents: [], calls: [], pipelines: {},
+  agency: 'all', query: '', view: 'incidents', sortMode: 'smart', liveCategories: null, feeds: [], incidents: [], calls: [], pipelines: {},
   refreshPaused: false, incidentIds: new Set(), incidentUpdateCounts: new Map(), firstIncidentLoad: true, announcedIds: new Set(), freshIncidentIds: new Map(),
   pageStartedAt: Date.now(),
   tickerQueue: [], tickerActive: false, tickerIndex: 0, tickerRotationTimer: null, tickerOverrideTimer: null,
   tickerFeaturedIncident: null, tickerFeaturedUntil: 0, tickerFeaturedTimer: null,
   map: null, mapLayer: null, mapMarkers: new Map(), mapHasFitBounds: false, mapTimer: null, mapExpiryTimer: null, mapEvents: null,
-  mapRefreshTimer: null, mapRefreshSequence: 0, liveUpdates: null, authSession: null, pendingAudience: null
+  mapRefreshTimer: null, mapRefreshSequence: 0, liveUpdates: null, authSession: null, pendingAudience: null,
+  preferenceSaveTimer: null, preferenceSaveQueue: Promise.resolve(), applyingPreferences: false
 };
 const voteDeviceId = getVoteDeviceId();
 const $ = (selector) => document.querySelector(selector);
@@ -71,6 +72,7 @@ function setAudienceView(audience) {
   }
   state.audience = selected;
   persistAudienceSelection();
+  saveDashboardPreferences();
   initializeAudienceView();
   renderIncidents();
   renderLiveCalls();
@@ -115,6 +117,7 @@ function refreshBoroughView() {
   renderIncidents();
   renderLiveCalls();
   renderFeeds();
+  saveDashboardPreferences();
   void refresh();
   void refreshMap();
 }
@@ -188,6 +191,7 @@ function renderIncidents() {
     <article class="incident-card category-${isBreaking ? 'breaking' : 'newsworthy'} ${state.freshIncidentIds.has(incident.id) && state.freshIncidentIds.get(incident.id) > Date.now() ? 'is-new-incident' : ''}">
       <div class="incident-meta"><span class="category-tag ${isBreaking ? 'breaking' : newsScore >= 4 ? 'developing' : 'newsworthy'}">${presentation}</span><span class="borough-tag">${escapeHtml((incident.agencies?.length ? incident.agencies : [incident.agency]).join(' + '))} · ${escapeHtml(boroughCode(incident.borough))}</span><time class="incident-time">${escapeHtml(formatTime(incident.occurredAt))}</time></div>
       <h3>${escapeHtml(incident.title)}</h3><p>${escapeHtml(incident.summary)}</p>
+      ${incident.communitySelected ? '<p class="community-selected-note">COMMUNITY SELECTED · NOT INDEPENDENTLY VERIFIED</p>' : ''}
       <p class="incident-location ${incident.location ? '' : 'missing'}"><strong>Address / cross streets:</strong> ${escapeHtml(incident.location || 'Not stated clearly in the transmission')}</p>
       ${incident.boxNumbers?.length ? `<p class="incident-units incident-box-number"><strong>FDNY Box:</strong> ${escapeHtml(incident.boxNumbers.join(', '))}</p>` : ''}
       ${incident.unitIds?.length ? `<p class="incident-units"><strong>Units:</strong> ${escapeHtml(incident.unitIds.join(', '))}</p>` : ''}
@@ -255,6 +259,32 @@ function wireIncidentVoting() {
     } catch (error) {
       button.disabled = false;
       if (feedback) feedback.textContent = error.message;
+    }
+  });
+}
+
+function wireLiveCallVoting() {
+  $('#live-calls-list').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-live-vote]');
+    if (!button || button.disabled) return;
+    const call = state.calls.find((item) => item.id === button.dataset.liveCallId);
+    if (!call || call.category === 'routine') return;
+    button.disabled = true;
+    call.voteMessage = 'Recording…';
+    try {
+      const response = await fetch(`/api/live-calls/${encodeURIComponent(call.id)}/vote`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: voteDeviceId, vote: button.dataset.liveVote })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not record vote.');
+      call.votes = { up: result.up, down: result.down, myVote: result.myVote };
+      call.voteMessage = result.message;
+      renderLiveCalls();
+      if (result.promoted) await refresh();
+    } catch (error) {
+      call.voteMessage = error.message;
+      renderLiveCalls();
     }
   });
 }
@@ -529,7 +559,9 @@ function initializeMap() {
 
 function renderLiveCalls() {
   const visible = state.calls.filter((call) => (state.boroughs.has(call.borough) || (state.boroughs.size > 0 && call.borough === 'Citywide'))
-    && (state.agency === 'all' || call.agency === state.agency));
+    && (state.agency === 'all' || call.agency === state.agency)
+    && (!state.liveCategories || state.liveCategories.has(call.category)));
+  renderLiveCategoryControls(visible.length);
   if (!visible.length) {
     $('#live-calls-list').innerHTML = `<div class="live-empty-state"><strong>${state.query ? 'No matching radio calls' : 'No transcribed calls yet'}</strong><p>${state.query ? 'Try a different search or clear the active filters.' : 'Calls appear here after a feed is connected and audio is transcribed. Routine calls are included in this view.'}</p></div>`;
     return;
@@ -541,9 +573,92 @@ function renderLiveCalls() {
       ${call.location ? `<div class="live-transcript-location"><strong>Address / cross streets:</strong> ${escapeHtml(call.location)}</div>` : ''}
       ${call.transcript ? `<div class="live-transcript">${escapeHtml(call.transcript)}</div>` : '<div class="transcript-unavailable">Transcript is not publicly exposed. Set DASHBOARD_PUBLIC_TRANSCRIPTS=true only after reviewing privacy and retention requirements.</div>'}
       <p class="live-call-summary">${escapeHtml(call.summary)}</p>
+      ${call.category !== 'routine' ? `<div class="live-call-vote-row"><span class="live-call-vote-caption">HELP SURFACE THIS REPORT <small>10 upvotes, 8 net votes, and minimum triage checks can add it to Latest Incidents. Votes are not verification.</small></span><div class="live-call-vote-controls"><button class="incident-vote-button ${call.votes?.myVote === 'up' ? 'selected' : ''}" type="button" data-live-vote="up" data-live-call-id="${encodeURIComponent(call.id)}" aria-label="Upvote radio report, ${Number(call.votes?.up) || 0} votes" aria-pressed="${call.votes?.myVote === 'up'}" ${call.votes?.myVote ? 'disabled' : ''}>👍 <span>${Number(call.votes?.up) || 0}</span></button><button class="incident-vote-button ${call.votes?.myVote === 'down' ? 'selected' : ''}" type="button" data-live-vote="down" data-live-call-id="${encodeURIComponent(call.id)}" aria-label="Downvote radio report, ${Number(call.votes?.down) || 0} votes" aria-pressed="${call.votes?.myVote === 'down'}" ${call.votes?.myVote ? 'disabled' : ''}>👎 <span>${Number(call.votes?.down) || 0}</span></button></div><span class="live-call-vote-feedback" role="status" aria-live="polite">${escapeHtml(call.voteMessage || '')}</span></div>` : ''}
       ${call.hasAudio ? `<audio class="live-call-audio" controls preload="none" src="/api/live-calls/${encodeURIComponent(call.id)}/audio">Audio playback is not supported.</audio>` : `<div class="audio-retention-note">${call.agency === 'NYPD' ? 'NYPD AUDIO IS TRANSCRIBED IN MEMORY AND NOT RETAINED' : 'AUDIO PLAYBACK NOT AVAILABLE'}</div>`}
       <div class="live-call-foot"><span>${state.audience === 'buff' ? 'BUFF' : state.audience === 'news' ? 'NEWS MEDIA' : 'PUBLIC'} ${Math.round(Math.max(1, Math.min(5, Number(state.audience === 'buff' ? call.buffInterestScore ?? call.newsworthinessScore : state.audience === 'news' ? call.assignmentDeskScore ?? call.newsworthinessScore : call.newsworthinessScore) || 1)))}/5 · PUBLIC ${Math.round(Math.max(1, Math.min(5, Number(call.newsworthinessScore) || 1)))}/5 · DESK ${Math.round(Math.max(1, Math.min(5, Number(call.assignmentDeskScore) || Number(call.newsworthinessScore) || 1)))}/5 · BUFF ${Math.round(Math.max(1, Math.min(5, Number(call.buffInterestScore) || Number(call.newsworthinessScore) || 1)))}/5</span><span>TRIAGE FIT ${Math.round(Math.max(0, Math.min(1, Number(call.confidence) || 0)) * 100)}% · VERIFY INDEPENDENTLY</span></div>
     </article>`).join('');
+}
+
+const liveCallCategories = ['routine', 'newsworthy', 'breaking', 'funny', 'weird_unique'];
+
+function renderLiveCategoryControls(visibleCount) {
+  document.querySelectorAll('[data-live-category]').forEach((button) => {
+    const value = button.dataset.liveCategory;
+    const selected = value === 'all' ? !state.liveCategories : state.liveCategories?.has(value);
+    button.classList.toggle('active', Boolean(selected));
+    button.setAttribute('aria-pressed', String(Boolean(selected)));
+  });
+  const count = $('#live-call-filter-count');
+  if (count) count.textContent = `${visibleCount} ${visibleCount === 1 ? 'CALL' : 'CALLS'}`;
+}
+
+function toggleLiveCategory(value) {
+  if (value === 'all') state.liveCategories = null;
+  else {
+    const selected = state.liveCategories ? new Set(state.liveCategories) : new Set(liveCallCategories);
+    if (selected.has(value)) selected.delete(value);
+    else selected.add(value);
+    state.liveCategories = selected.size === liveCallCategories.length ? null : selected;
+  }
+  renderLiveCalls();
+  saveDashboardPreferences();
+}
+
+function dashboardPreferencesSnapshot() {
+  return {
+    boroughs: [...state.boroughs], audience: state.audience, agency: state.agency,
+    sortMode: state.sortMode, view: state.view,
+    liveCategories: state.liveCategories ? [...state.liveCategories] : [...liveCallCategories]
+  };
+}
+
+function saveDashboardPreferences() {
+  if (!state.authSession?.account?.id || state.applyingPreferences) return;
+  clearTimeout(state.preferenceSaveTimer);
+  state.preferenceSaveTimer = setTimeout(() => {
+    const preferences = dashboardPreferencesSnapshot();
+    state.preferenceSaveQueue = state.preferenceSaveQueue.catch(() => undefined).then(async () => {
+      await fetch('/api/account/preferences', {
+        method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferences })
+      });
+    });
+  }, 300);
+}
+
+async function loadSavedDashboardPreferences() {
+  if (!state.authSession?.account?.id) return;
+  try {
+    const response = await fetch('/api/account/preferences', { credentials: 'same-origin', cache: 'no-store' });
+    if (!response.ok) return;
+    const { preferences } = await response.json();
+    if (!preferences) return;
+    state.applyingPreferences = true;
+    if (Array.isArray(preferences.boroughs)) state.boroughs = new Set(preferences.boroughs.filter((borough) => boroughNames.includes(borough)));
+    state.agency = ['all', 'FDNY', 'NYPD'].includes(preferences.agency) ? preferences.agency : 'all';
+    state.sortMode = ['smart', 'newest', 'priority'].includes(preferences.sortMode) ? preferences.sortMode : 'smart';
+    state.view = preferences.view === 'live' ? 'live' : 'incidents';
+    const savedAudience = ['public', 'buff', 'news'].includes(preferences.audience) ? preferences.audience : 'public';
+    state.audience = canViewAudience(savedAudience) ? savedAudience : 'public';
+    const categories = Array.isArray(preferences.liveCategories) ? preferences.liveCategories.filter((item) => liveCallCategories.includes(item)) : liveCallCategories;
+    state.liveCategories = categories.length === liveCallCategories.length ? null : new Set(categories);
+    persistBoroughSelection();
+    persistAudienceSelection();
+    initializeBoroughPage();
+    initializeAudienceView();
+    $('#incident-sort').value = state.sortMode;
+    updateAgencyFilterControls();
+    setView(state.view);
+  } catch { /* Account preference loading is best-effort; current defaults remain usable. */ }
+  finally { state.applyingPreferences = false; }
+}
+
+function updateAgencyFilterControls() {
+  document.querySelectorAll('.filter-chip[data-filter]').forEach((button) => {
+    const selected = button.dataset.filter === state.agency;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
 }
 
 function renderDiagnostics() {
@@ -563,10 +678,12 @@ async function refresh() {
   if (state.query) params.set('q', state.query);
   const incidentParams = new URLSearchParams(params);
   incidentParams.set('deviceId', voteDeviceId);
+  const callParams = new URLSearchParams(params);
+  callParams.set('deviceId', voteDeviceId);
   try {
     const [incidentResponse, callResponse, feedResponse, diagnosticResponse] = await Promise.all([
       fetch(`/api/incidents?${incidentParams}`, { cache: 'no-store' }),
-      fetch(`/api/live-calls?${params}`, { cache: 'no-store' }),
+      fetch(`/api/live-calls?${callParams}`, { cache: 'no-store' }),
       fetch(`/api/feeds${params.toString() ? `?${params}` : ''}`, { cache: 'no-store' }),
       fetch('/api/diagnostics', { cache: 'no-store' })
     ]);
@@ -594,7 +711,9 @@ async function initialize() {
   wireAuthControls();
   wireIncidentShareControls();
   wireIncidentVoting();
+  wireLiveCallVoting();
   await loadAuthSession();
+  await loadSavedDashboardPreferences();
   updateClock();
   setInterval(updateClock, 1000);
   initializeBoroughPage();
@@ -606,6 +725,9 @@ async function initialize() {
     initializeAudienceView();
     openAuthModal('login', `Log in or register for the ${state.pendingAudience === 'buff' ? 'Buff' : 'News Media'} view.`);
   }
+  $('#incident-sort').value = state.sortMode;
+  updateAgencyFilterControls();
+  setView(state.view);
   initializeMap();
   initializeLiveUpdates();
   void initializePublicConfig();
@@ -745,6 +867,7 @@ async function submitAuthForm(event) {
     }
     const result = await authRequest('/api/auth/login', values);
     state.authSession = result.session;
+    await loadSavedDashboardPreferences();
     renderAuthHeader();
     $('#auth-modal').hidden = true;
     if (state.pendingAudience) {
@@ -872,25 +995,24 @@ $('#search').addEventListener('input', (event) => {
   window.searchTimer = setTimeout(refresh, 250);
 });
 
-document.querySelectorAll('.filter-chip').forEach((button) => button.addEventListener('click', () => {
+document.querySelectorAll('.filter-chip[data-filter]').forEach((button) => button.addEventListener('click', () => {
   document.querySelectorAll('.filter-chip').forEach((item) => item.classList.remove('active'));
   button.classList.add('active');
   state.agency = button.dataset.filter;
+  updateAgencyFilterControls();
   renderIncidents();
   renderLiveCalls();
-}));
-
-document.querySelectorAll('[data-live-agency]').forEach((button) => button.addEventListener('click', () => {
-  toggleLiveCallFilter('agency', button.dataset.liveAgency);
+  saveDashboardPreferences();
 }));
 
 document.querySelectorAll('[data-live-category]').forEach((button) => button.addEventListener('click', () => {
-  toggleLiveCallFilter('category', button.dataset.liveCategory);
+  toggleLiveCategory(button.dataset.liveCategory);
 }));
 
 $('#incident-sort').addEventListener('change', (event) => {
   state.sortMode = event.target.value;
   renderIncidents();
+  saveDashboardPreferences();
 });
 
 $('#incidents-tab').addEventListener('click', () => setView('incidents'));
@@ -905,9 +1027,11 @@ function setView(view) {
   $('#live-calls-tab').setAttribute('aria-selected', String(!incidentsActive));
   $('#incident-list').hidden = !incidentsActive;
   $('#live-calls-list').hidden = incidentsActive;
-  $('#incident-filters').hidden = !incidentsActive;
+  $('#incident-filters').hidden = false;
+  $('#incident-sort-control').hidden = !incidentsActive;
   $('#live-call-filters').hidden = incidentsActive;
   $('#search').placeholder = incidentsActive ? 'Search alerts…' : 'Search radio calls…';
+  saveDashboardPreferences();
 }
 
 document.querySelectorAll('.borough-tab').forEach((button) => button.addEventListener('click', () => {
