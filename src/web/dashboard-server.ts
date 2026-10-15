@@ -95,6 +95,7 @@ export class DashboardServer {
   private server?: ReturnType<typeof createServer>;
   private readonly eventClients = new Set<ServerResponse>();
   private unsubscribeIncidentChanges?: () => void;
+  private unsubscribeLiveCallChanges?: () => void;
   private readonly authRateLimits = new Map<string, { count: number; resetsAt: number }>();
   private readonly activePresence = new ActivePresence();
   private pendingIncidentProvider?: () => Array<Record<string, unknown>>;
@@ -132,6 +133,9 @@ export class DashboardServer {
     const root = join(process.cwd(), 'public', 'dashboard');
     this.unsubscribeIncidentChanges = this.store.onIncidentChange(() => {
       for (const client of this.eventClients) client.write('event: incidents-updated\ndata: {}\n\n');
+    });
+    this.unsubscribeLiveCallChanges = this.store.onLiveCallChange(() => {
+      for (const client of this.eventClients) client.write('event: live-calls-updated\ndata: {}\n\n');
     });
     this.server = createServer(async (request, response) => {
       const cspNonce = randomUUID().replaceAll('-', '');
@@ -343,6 +347,8 @@ export class DashboardServer {
     if (!this.server) return;
     this.unsubscribeIncidentChanges?.();
     this.unsubscribeIncidentChanges = undefined;
+    this.unsubscribeLiveCallChanges?.();
+    this.unsubscribeLiveCallChanges = undefined;
     for (const client of this.eventClients) client.end();
     this.eventClients.clear();
     const server = this.server;

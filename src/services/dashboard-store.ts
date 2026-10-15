@@ -146,6 +146,7 @@ export class DashboardStore {
   private readonly liveCallAudioFiles = new Map<string, { path: string; contentType: string }>();
   private feedStatusProvider?: () => BroadcastifyFeedStatus[];
   private readonly incidentChangeListeners = new Set<() => void>();
+  private readonly liveCallChangeListeners = new Set<() => void>();
   private readonly feedAlerts = new Map<string, { severity: 'newsworthy' | 'breaking'; until: number }>();
   private readonly feedCallActivity = new Map<string, number[]>();
   private readonly pipelineDiagnostics = new Map<string, PipelineDiagnostics>([['calls-api', {
@@ -219,6 +220,11 @@ export class DashboardStore {
     return () => this.incidentChangeListeners.delete(listener);
   }
 
+  onLiveCallChange(listener: () => void): () => void {
+    this.liveCallChangeListeners.add(listener);
+    return () => this.liveCallChangeListeners.delete(listener);
+  }
+
   async recordLiveCall(input: DashboardLiveCallInput): Promise<DashboardLiveCall> {
     const id = randomUUID();
     const record: DashboardLiveCall = {
@@ -249,6 +255,7 @@ export class DashboardStore {
         this.liveCallAudioFiles.delete(removed.id);
       }
     }
+    for (const listener of this.liveCallChangeListeners) listener();
     return record;
   }
 

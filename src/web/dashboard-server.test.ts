@@ -383,15 +383,24 @@ describe('DashboardServer account routes', () => {
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
       const reader = response.body!.getReader();
-      await reader.read();
-      const event = reader.read();
+      await dashboardStore.recordLiveCall({
+        sourceId: 'sse-test-call', occurredAt: new Date(), agency: 'FDNY', borough: 'Manhattan',
+        transcript: 'Engine 1 responding.', category: 'routine', summary: 'Routine unit response.',
+        confidence: 0.8, newsworthinessScore: 1
+      });
       await dashboardStore.publish({
         title: 'Test Fire', summary: 'A test event.', occurredAt: new Date(), agency: 'FDNY', borough: 'Manhattan',
         category: 'newsworthy', location: '123 Main Street', latitude: 40.75, longitude: -73.98,
         confidence: 0.9, newsworthinessScore: 4
       });
-      const result = await event;
-      assert.match(new TextDecoder().decode(result.value), /event: incidents-updated/);
+      let received = '';
+      for (let attempt = 0; attempt < 5 && (!received.includes('event: live-calls-updated') || !received.includes('event: incidents-updated')); attempt += 1) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        received += new TextDecoder().decode(chunk.value);
+      }
+      assert.match(received, /event: live-calls-updated/);
+      assert.match(received, /event: incidents-updated/);
       await reader.cancel();
     } finally {
       await server.stop();

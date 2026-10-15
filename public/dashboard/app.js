@@ -130,7 +130,7 @@ function updateClock() {
 }
 
 function renderFeeds() {
-  $('#feed-list').innerHTML = state.feeds
+  const cards = state.feeds
     .filter((feed) => state.boroughs.size > 0 && (feed.borough === 'Citywide' || state.boroughs.has(feed.borough)))
     .map((feed) => {
     const isFdny = feed.agency === 'FDNY';
@@ -152,7 +152,7 @@ function renderFeeds() {
     const bars = (Array.isArray(meterLevels) ? meterLevels : Array.from({ length: 40 }, () => 0)).slice(-40);
     const meter = bars.map((level) => `<span class="feed-meter-bar" style="--meter-level:${Math.round(Math.max(0, Math.min(1, Number(level) || 0)) * 100)}%"></span>`).join('');
     return `
-    <article class="feed-card${alertClass}"${alertSeverity ? ` data-alert-severity="${alertSeverity}"` : ''}>
+    <article class="feed-card${alertClass}" data-feed-id="${escapeHtml(feed.id)}"${alertSeverity ? ` data-alert-severity="${alertSeverity}"` : ''}>
       <div class="feed-top"><span class="agency-tag ${feed.agency === 'NYPD' ? 'nypd' : ''}">${escapeHtml(feed.agency)}</span><span class="feed-state ${escapeHtml(feed.state)}"><i class="health-dot ${escapeHtml(feed.state)}"></i>${stateLabel}</span></div>
       <div class="feed-name">${escapeHtml(feed.name)}</div>
       <div class="feed-location">${escapeHtml(feed.borough)}</div>
@@ -160,7 +160,51 @@ function renderFeeds() {
       <div class="feed-metrics"><div class="feed-metric"><span>CALLS SEEN</span><strong>${Number(feed.callsSeen) || 0}</strong></div><div class="feed-metric"><span>${isFdny ? 'LAST CALL' : 'LAST AUDIO'}</span><strong class="${activityAt && isRecent(activityAt) ? 'recent' : ''}">${activityText}</strong></div></div>
       ${feed.lastError ? `<span class="feed-error">${escapeHtml(feed.lastError)}</span>` : ''}
     </article>`;
-  }).join('');
+  });
+  syncKeyedArticles($('#feed-list'), cards, 'data-feed-id');
+}
+
+function syncKeyedArticles(container, markup, keyAttribute, leadingMarkup = '') {
+  const previous = new Map([...container.querySelectorAll(`:scope > article[${keyAttribute}]`)]
+    .map((element) => [element.getAttribute(keyAttribute), element]));
+  const template = document.createElement('template');
+  const ordered = [];
+  for (const html of markup) {
+    template.innerHTML = html.trim();
+    const incoming = template.content.firstElementChild;
+    if (!incoming) continue;
+    const key = incoming.getAttribute(keyAttribute);
+    const existing = key ? previous.get(key) : undefined;
+    if (existing) {
+      previous.delete(key);
+      if (existing.outerHTML !== incoming.outerHTML) {
+        const openDetails = [...existing.querySelectorAll('details')].map((item) => item.open);
+        const oldAudio = existing.querySelector('audio');
+        existing.className = incoming.className;
+        for (const attribute of [...existing.attributes]) {
+          if (attribute.name !== keyAttribute) existing.removeAttribute(attribute.name);
+        }
+        for (const attribute of [...incoming.attributes]) existing.setAttribute(attribute.name, attribute.value);
+        existing.innerHTML = incoming.innerHTML;
+        existing.querySelectorAll('details').forEach((item, index) => { item.open = openDetails[index] ?? false; });
+        const newAudio = existing.querySelector('audio');
+        if (oldAudio && newAudio && oldAudio.getAttribute('src') === newAudio.getAttribute('src')) newAudio.replaceWith(oldAudio);
+      }
+      ordered.push(existing);
+    } else ordered.push(incoming);
+  }
+  for (const stale of previous.values()) stale.remove();
+  const leading = leadingMarkup ? `${leadingMarkup}` : '';
+  if (container.dataset.leadingMarkup !== leading) {
+    container.querySelectorAll(':scope > :not(article)').forEach((element) => element.remove());
+    if (leadingMarkup) {
+      template.innerHTML = leadingMarkup;
+      const leadingNode = template.content.firstElementChild;
+      if (leadingNode) container.prepend(leadingNode);
+    }
+    container.dataset.leadingMarkup = leading;
+  }
+  for (const article of ordered) container.appendChild(article);
 }
 
 function buildSyntheticCallWave(seedValue, now = Date.now()) {
@@ -199,13 +243,14 @@ function renderIncidents() {
   $('#incident-count').textContent = String(visible.length).padStart(2, '0');
   if (!visible.length) {
     $('#incident-list').innerHTML = `<div class="empty-state"><span class="empty-symbol">⌁</span><strong>${state.query ? 'No matching incidents' : 'All quiet on the board'}</strong><p>${state.query ? 'Try another search or clear the active filters.' : 'Qualified incidents will appear here when reviewed and published.'}</p><span class="empty-foot">NO ROUTINE CALLS SHOWN</span></div>`;
+    delete $('#incident-list').dataset.leadingMarkup;
     return;
   }
   const unitSearch = detectUnitSearch(state.query);
   const unitHistoryBanner = unitSearch
     ? `<div class="unit-history-banner"><strong>UNIT CALL HISTORY · ${escapeHtml(unitSearch)}</strong><span>Incidents and updates where radio traffic explicitly identified this unit. Station rosters do not imply attendance.</span></div>`
     : '';
-  $('#incident-list').innerHTML = unitHistoryBanner + visible.map((incident) => {
+  const cards = visible.map((incident) => {
     const newsScore = Math.round(Math.max(1, Math.min(5, Number(incident.newsworthinessScore) || 1)));
     const buffScore = Math.round(Math.max(1, Math.min(5, Number(incident.buffInterestScore) || newsScore)));
     const deskScore = Math.round(Math.max(1, Math.min(5, Number(incident.assignmentDeskScore) || newsScore)));
@@ -213,7 +258,7 @@ function renderIncidents() {
     const isBreaking = newsScore === 5;
       const presentation = newsScore >= 5 ? 'BREAKING' : newsScore >= 4 ? 'DEVELOPING' : newsScore >= 3 ? 'INCIDENT' : newsScore >= 2 ? 'ACTIVITY' : 'NONE';
     return `
-    <article class="incident-card category-${isBreaking ? 'breaking' : 'newsworthy'} ${state.freshIncidentIds.has(incident.id) && state.freshIncidentIds.get(incident.id) > Date.now() ? 'is-new-incident' : ''}">
+    <article class="incident-card category-${isBreaking ? 'breaking' : 'newsworthy'} ${state.freshIncidentIds.has(incident.id) && state.freshIncidentIds.get(incident.id) > Date.now() ? 'is-new-incident' : ''}" data-incident-card-id="${escapeHtml(incident.id)}">
       <div class="incident-meta"><span class="category-tag ${isBreaking ? 'breaking' : newsScore >= 4 ? 'developing' : 'newsworthy'}">${presentation}</span><span class="borough-tag">${escapeHtml((incident.agencies?.length ? incident.agencies : [incident.agency]).join(' + '))} · ${escapeHtml(boroughCode(incident.borough))}</span><time class="incident-time">${escapeHtml(formatTime(incident.occurredAt))}</time></div>
       <h3>${escapeHtml(incident.title)}</h3><p>${escapeHtml(incident.summary)}</p>
       ${incident.communitySelected ? '<p class="community-selected-note">COMMUNITY SELECTED · NOT INDEPENDENTLY VERIFIED</p>' : ''}
@@ -227,7 +272,8 @@ function renderIncidents() {
       ${incident.category !== 'routine' ? `<div class="incident-vote-row" aria-label="Community feedback"><span class="incident-vote-caption">WAS THIS USEFUL? <small>Feedback helps evaluate future AI summaries; it does not verify the event.</small></span><div class="incident-vote-controls"><button class="incident-vote-button ${incident.votes?.myVote === 'up' ? 'selected' : ''}" type="button" data-incident-vote="up" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Thumbs up, ${Number(incident.votes?.up) || 0} votes" aria-pressed="${incident.votes?.myVote === 'up'}" ${incident.votes?.myVote ? 'disabled' : ''}><span aria-hidden="true">👍</span><span>${Number(incident.votes?.up) || 0}</span></button><button class="incident-vote-button ${incident.votes?.myVote === 'down' ? 'selected' : ''}" type="button" data-incident-vote="down" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Thumbs down, ${Number(incident.votes?.down) || 0} votes" aria-pressed="${incident.votes?.myVote === 'down'}" ${incident.votes?.myVote ? 'disabled' : ''}><span aria-hidden="true">👎</span><span>${Number(incident.votes?.down) || 0}</span></button></div><span class="incident-vote-feedback" role="status" aria-live="polite"></span></div>` : ''}
       <div class="incident-share-row" aria-label="Share incident"><button class="incident-share-button incident-social-share" type="button" data-share-service="facebook" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Share incident on Facebook" title="Share on Facebook">f</button><button class="incident-share-button incident-social-share" type="button" data-share-service="x" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Share incident on X" title="Share on X">𝕏</button><button class="incident-share-button copy-incident-url" type="button" data-incident-id="${encodeURIComponent(incident.id)}" aria-label="Copy incident URL" title="Copy URL"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6.5" y="6.5" width="9" height="11" rx="1.5"></rect><path d="M13.5 6V4.5A1.5 1.5 0 0 0 12 3H5.5A1.5 1.5 0 0 0 4 4.5v9A1.5 1.5 0 0 0 5.5 15H6"></path></svg></button><span class="share-copy-feedback" role="status" aria-live="polite"></span></div>
     </article>`;
-  }).join('');
+  });
+  syncKeyedArticles($('#incident-list'), cards, 'data-incident-card-id', unitHistoryBanner);
 }
 
 function wireIncidentShareControls() {
@@ -556,9 +602,10 @@ function initializeLiveUpdates() {
   const events = new EventSource('/api/events');
   state.liveUpdates = events;
   events.addEventListener('incidents-updated', () => {
-    void refresh();
+    void refreshIncidents();
     scheduleMapRefresh();
   });
+  events.addEventListener('live-calls-updated', () => { void refreshLiveCalls(); });
   events.addEventListener('open', () => {
     $('#system-state').textContent = 'ONLINE';
     scheduleMapRefresh();
@@ -589,10 +636,11 @@ function renderLiveCalls() {
   renderLiveCategoryControls(visible.length);
   if (!visible.length) {
     $('#live-calls-list').innerHTML = `<div class="live-empty-state"><strong>${state.query ? 'No matching radio calls' : 'No transcribed calls yet'}</strong><p>${state.query ? 'Try a different search or clear the active filters.' : 'Calls appear here after a feed is connected and audio is transcribed. Routine calls are included in this view.'}</p></div>`;
+    delete $('#live-calls-list').dataset.leadingMarkup;
     return;
   }
-  $('#live-calls-list').innerHTML = visible.map((call) => `
-    <article class="live-call-card">
+  const cards = visible.map((call) => `
+    <article class="live-call-card" data-live-call-card-id="${escapeHtml(call.id)}">
       <div class="live-call-head"><span class="category-tag ${escapeHtml(call.category)}">${escapeHtml(categoryLabel(call.category))}</span><span class="borough-tag">${escapeHtml(call.agency)} · ${escapeHtml(boroughCode(call.borough))}</span><time>${escapeHtml(formatTime(call.occurredAt))}</time></div>
       <div class="live-call-title">${escapeHtml(call.groupName || `${call.agency} radio transmission`)}</div><div class="live-call-ref">${escapeHtml(call.sourceId)}</div>
       <div class="live-call-generated-title"><span>AI CALL TITLE</span><strong>${escapeHtml(call.headline || call.summary || 'Radio call')}</strong></div>
@@ -601,7 +649,8 @@ function renderLiveCalls() {
       ${call.category !== 'routine' ? `<div class="live-call-vote-row"><span class="live-call-vote-caption">HELP SURFACE THIS REPORT <small>10 upvotes, 8 net votes, and minimum triage checks can add it to Latest Incidents. Votes are not verification.</small></span><div class="live-call-vote-controls"><button class="incident-vote-button ${call.votes?.myVote === 'up' ? 'selected' : ''}" type="button" data-live-vote="up" data-live-call-id="${encodeURIComponent(call.id)}" aria-label="Upvote radio report, ${Number(call.votes?.up) || 0} votes" aria-pressed="${call.votes?.myVote === 'up'}" ${call.votes?.myVote ? 'disabled' : ''}>👍 <span>${Number(call.votes?.up) || 0}</span></button><button class="incident-vote-button ${call.votes?.myVote === 'down' ? 'selected' : ''}" type="button" data-live-vote="down" data-live-call-id="${encodeURIComponent(call.id)}" aria-label="Downvote radio report, ${Number(call.votes?.down) || 0} votes" aria-pressed="${call.votes?.myVote === 'down'}" ${call.votes?.myVote ? 'disabled' : ''}>👎 <span>${Number(call.votes?.down) || 0}</span></button></div><span class="live-call-vote-feedback" role="status" aria-live="polite">${escapeHtml(call.voteMessage || '')}</span></div>` : ''}
       ${call.hasAudio ? `<audio class="live-call-audio" controls preload="none" src="/api/live-calls/${encodeURIComponent(call.id)}/audio">Audio playback is not supported.</audio>` : `<div class="audio-retention-note">${call.agency === 'NYPD' ? 'NYPD AUDIO IS TRANSCRIBED IN MEMORY AND NOT RETAINED' : 'AUDIO PLAYBACK NOT AVAILABLE'}</div>`}
       <div class="live-call-foot"><span>${state.audience === 'buff' ? 'BUFF' : state.audience === 'news' ? 'NEWS MEDIA' : 'PUBLIC'} ${Math.round(Math.max(1, Math.min(5, Number(state.audience === 'buff' ? call.buffInterestScore ?? call.newsworthinessScore : state.audience === 'news' ? call.assignmentDeskScore ?? call.newsworthinessScore : call.newsworthinessScore) || 1)))}/5 · PUBLIC ${Math.round(Math.max(1, Math.min(5, Number(call.newsworthinessScore) || 1)))}/5 · DESK ${Math.round(Math.max(1, Math.min(5, Number(call.assignmentDeskScore) || Number(call.newsworthinessScore) || 1)))}/5 · BUFF ${Math.round(Math.max(1, Math.min(5, Number(call.buffInterestScore) || Number(call.newsworthinessScore) || 1)))}/5</span><span>TRIAGE FIT ${Math.round(Math.max(0, Math.min(1, Number(call.confidence) || 0)) * 100)}% · VERIFY INDEPENDENTLY</span></div>
-    </article>`).join('');
+    </article>`);
+  syncKeyedArticles($('#live-calls-list'), cards, 'data-live-call-card-id');
 }
 
 const liveCallCategories = ['routine', 'newsworthy', 'breaking', 'funny', 'weird_unique'];
@@ -698,7 +747,6 @@ function renderDiagnostics() {
 }
 
 async function refresh() {
-  if (state.refreshPaused) return;
   const params = boroughQueryParams(new URLSearchParams());
   if (state.query) params.set('q', state.query);
   const incidentParams = new URLSearchParams(params);
@@ -714,7 +762,6 @@ async function refresh() {
     ]);
     if (!incidentResponse.ok || !callResponse.ok || !feedResponse.ok || !diagnosticResponse.ok) throw new Error('Dashboard API unavailable');
     const [incidentData, callData, feedData, diagnosticData] = await Promise.all([incidentResponse.json(), callResponse.json(), feedResponse.json(), diagnosticResponse.json()]);
-    if (state.refreshPaused) return;
     state.incidents = Array.isArray(incidentData.incidents) ? incidentData.incidents : [];
     trackNewIncidents(state.incidents);
     state.calls = Array.isArray(callData.calls) ? callData.calls : [];
@@ -730,6 +777,33 @@ async function refresh() {
     $('#system-state').textContent = 'OFFLINE';
     $('#feed-status').textContent = 'RETRYING';
   }
+}
+
+async function refreshIncidents() {
+  const params = boroughQueryParams(new URLSearchParams());
+  if (state.query) params.set('q', state.query);
+  params.set('deviceId', voteDeviceId);
+  try {
+    const response = await fetch(`/api/incidents?${params}`, { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json();
+    state.incidents = Array.isArray(data.incidents) ? data.incidents : [];
+    trackNewIncidents(state.incidents);
+    renderIncidents();
+  } catch { /* Periodic snapshot refresh will recover after a transient failure. */ }
+}
+
+async function refreshLiveCalls() {
+  const params = boroughQueryParams(new URLSearchParams());
+  if (state.query) params.set('q', state.query);
+  params.set('deviceId', voteDeviceId);
+  try {
+    const response = await fetch(`/api/live-calls?${params}`, { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json();
+    state.calls = Array.isArray(data.calls) ? data.calls : [];
+    renderLiveCalls();
+  } catch { /* Periodic snapshot refresh will recover after a transient failure. */ }
 }
 
 async function refreshFeedTelemetry() {
