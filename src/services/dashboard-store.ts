@@ -90,6 +90,7 @@ export interface DashboardLiveCallInput {
   agency: Agency;
   borough: Borough | 'Citywide';
   transcript: string;
+  headline?: string;
   category: AlertCategory | 'routine';
   incidentType?: IncidentType;
   location?: string;
@@ -112,6 +113,7 @@ export interface DashboardLiveCall {
   agency: Agency;
   borough: Borough | 'Citywide';
   transcript?: string;
+  headline?: string;
   category: AlertCategory | 'routine';
   incidentType?: IncidentType;
   location?: string;
@@ -187,6 +189,7 @@ export class DashboardStore {
       borough: input.borough,
       ...(this.allowPublicTranscripts && input.location ? { location: input.location.slice(0, 180) } : {}),
       ...(this.allowPublicTranscripts ? { transcript: input.transcript.slice(0, 4_000) } : {}),
+      ...(input.headline?.trim() ? { headline: input.headline.trim().slice(0, 180) } : {}),
       category: input.category,
       ...(input.incidentType ? { incidentType: input.incidentType } : {}),
       summary: this.allowPublicTranscripts ? input.summary.slice(0, 700) : 'Transcript and call summary display is disabled.',

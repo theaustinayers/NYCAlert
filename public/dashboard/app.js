@@ -6,9 +6,10 @@ const state = {
   tickerFeaturedIncident: null, tickerFeaturedUntil: 0, tickerFeaturedTimer: null,
   map: null, mapLayer: null, mapMarkers: new Map(), mapHasFitBounds: false, mapTimer: null, mapExpiryTimer: null, mapEvents: null,
   mapRefreshTimer: null, mapRefreshSequence: 0, liveUpdates: null, authSession: null, pendingAudience: null,
-  preferenceSaveTimer: null, preferenceSaveQueue: Promise.resolve(), applyingPreferences: false
+  preferenceSaveTimer: null, preferenceSaveQueue: Promise.resolve(), applyingPreferences: false, presenceTimer: null
 };
 const voteDeviceId = getVoteDeviceId();
+const presenceBrowserToken = getPresenceBrowserToken();
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const boroughCode = (borough) => ({ Manhattan: 'MH', Bronx: 'BX', Queens: 'QN', Brooklyn: 'BK', 'Staten Island': 'SI', Citywide: 'CW' })[borough] || borough;
@@ -570,7 +571,7 @@ function renderLiveCalls() {
     <article class="live-call-card">
       <div class="live-call-head"><span class="category-tag ${escapeHtml(call.category)}">${escapeHtml(categoryLabel(call.category))}</span><span class="borough-tag">${escapeHtml(call.agency)} · ${escapeHtml(boroughCode(call.borough))}</span><time>${escapeHtml(formatTime(call.occurredAt))}</time></div>
       <div class="live-call-title">${escapeHtml(call.groupName || `${call.agency} radio transmission`)}</div><div class="live-call-ref">${escapeHtml(call.sourceId)}</div>
-      ${call.location ? `<div class="live-transcript-location"><strong>Address / cross streets:</strong> ${escapeHtml(call.location)}</div>` : ''}
+      <div class="live-call-generated-title"><span>AI CALL TITLE</span><strong>${escapeHtml(call.headline || call.summary || 'Radio call')}</strong></div>
       ${call.transcript ? `<div class="live-transcript">${escapeHtml(call.transcript)}</div>` : '<div class="transcript-unavailable">Transcript is not publicly exposed. Set DASHBOARD_PUBLIC_TRANSCRIPTS=true only after reviewing privacy and retention requirements.</div>'}
       <p class="live-call-summary">${escapeHtml(call.summary)}</p>
       ${call.category !== 'routine' ? `<div class="live-call-vote-row"><span class="live-call-vote-caption">HELP SURFACE THIS REPORT <small>10 upvotes, 8 net votes, and minimum triage checks can add it to Latest Incidents. Votes are not verification.</small></span><div class="live-call-vote-controls"><button class="incident-vote-button ${call.votes?.myVote === 'up' ? 'selected' : ''}" type="button" data-live-vote="up" data-live-call-id="${encodeURIComponent(call.id)}" aria-label="Upvote radio report, ${Number(call.votes?.up) || 0} votes" aria-pressed="${call.votes?.myVote === 'up'}" ${call.votes?.myVote ? 'disabled' : ''}>👍 <span>${Number(call.votes?.up) || 0}</span></button><button class="incident-vote-button ${call.votes?.myVote === 'down' ? 'selected' : ''}" type="button" data-live-vote="down" data-live-call-id="${encodeURIComponent(call.id)}" aria-label="Downvote radio report, ${Number(call.votes?.down) || 0} votes" aria-pressed="${call.votes?.myVote === 'down'}" ${call.votes?.myVote ? 'disabled' : ''}>👎 <span>${Number(call.votes?.down) || 0}</span></button></div><span class="live-call-vote-feedback" role="status" aria-live="polite">${escapeHtml(call.voteMessage || '')}</span></div>` : ''}
@@ -707,6 +708,33 @@ async function refresh() {
   }
 }
 
+function getPresenceBrowserToken() {
+  const key = 'nycalert-presence-session';
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (existing && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(existing)) return existing;
+    const generated = crypto.randomUUID();
+    sessionStorage.setItem(key, generated);
+    return generated;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
+async function heartbeatPresence() {
+  try {
+    const response = await fetch('/api/presence', {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ browserToken: presenceBrowserToken }), cache: 'no-store'
+    });
+    if (!response.ok) return;
+    const { counts } = await response.json();
+    $('#presence-total').textContent = String(Number(counts?.total) || 0);
+    $('#presence-buff').textContent = String(Number(counts?.buff) || 0);
+    $('#presence-news').textContent = String(Number(counts?.newsMedia) || 0);
+  } catch { /* Keep the last aggregate counts when a heartbeat temporarily fails. */ }
+}
+
 async function initialize() {
   wireAuthControls();
   wireIncidentShareControls();
@@ -731,6 +759,11 @@ async function initialize() {
   initializeMap();
   initializeLiveUpdates();
   void initializePublicConfig();
+  void heartbeatPresence();
+  state.presenceTimer = setInterval(heartbeatPresence, 20_000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void heartbeatPresence();
+  });
   await refresh();
   setInterval(refresh, 15000);
 }

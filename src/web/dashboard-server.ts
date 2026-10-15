@@ -15,6 +15,7 @@ import type { DeploymentUpdater } from '../services/deployment-updater.js';
 import type { XIntegrationTester } from '../providers/x-post.js';
 import { isIncidentVote, type IncidentVoteStore } from '../services/incident-vote-store.js';
 import { communityPromotionThreshold, qualifiesForCommunityPromotion } from '../services/community-promotion.js';
+import { ActivePresence } from '../services/active-presence.js';
 import { logger } from '../logger.js';
 
 export interface DashboardAuthConfig {
@@ -95,6 +96,7 @@ export class DashboardServer {
   private readonly eventClients = new Set<ServerResponse>();
   private unsubscribeIncidentChanges?: () => void;
   private readonly authRateLimits = new Map<string, { count: number; resetsAt: number }>();
+  private readonly activePresence = new ActivePresence();
   private pendingIncidentProvider?: () => Array<Record<string, unknown>>;
   private pendingIncidentDiscarder?: (id: string) => boolean;
   private pendingIncidentAllower?: (id: string) => Promise<{ incidentId: string } | undefined>;
@@ -137,6 +139,14 @@ export class DashboardServer {
       try {
         const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
         if (await this.handleAccountRoutes(request, response, url)) return;
+        if (url.pathname === '/api/presence') {
+          if (request.method !== 'POST') {
+            json(response, 405, { error: 'Method not allowed.' });
+            return;
+          }
+          await this.handlePresenceHeartbeat(request, response);
+          return;
+        }
         const voteRoute = /^\/api\/incidents\/([0-9a-f-]{36})\/vote$/i.exec(url.pathname);
         if (voteRoute && request.method === 'POST') {
           await this.handleIncidentVote(request, response, voteRoute[1]!);
@@ -933,6 +943,31 @@ export class DashboardServer {
       json(response, 200, { ...result, message: result.accepted ? 'Vote recorded.' : 'This device has already voted on this incident.' });
     } catch (error) {
       json(response, 400, { error: error instanceof Error ? error.message : 'Could not record vote.' });
+    }
+  }
+
+  private async handlePresenceHeartbeat(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (!this.hasSameOrigin(request)) {
+      json(response, 403, { error: 'Request origin was not accepted.' });
+      return;
+    }
+    if (!this.takeRateLimit(request, 'presence-heartbeat', 120, 60_000)) {
+      json(response, 429, { error: 'Presence heartbeat is temporarily rate-limited.' });
+      return;
+    }
+    try {
+      const body = await readJsonBody(request);
+      if (typeof body.browserToken !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.browserToken)) {
+        json(response, 400, { error: 'A valid temporary browser session token is required.' });
+        return;
+      }
+      const session = this.accounts?.getSession(this.readSessionToken(request));
+      const audience = session?.kind === 'user' && session.account.accountType === 'buff' ? 'buff'
+        : session?.kind === 'user' && session.account.accountType === 'news' ? 'news'
+          : undefined;
+      json(response, 200, { counts: this.activePresence.heartbeat(body.browserToken, audience) });
+    } catch (error) {
+      json(response, 400, { error: error instanceof Error ? error.message : 'Could not update active presence.' });
     }
   }
 

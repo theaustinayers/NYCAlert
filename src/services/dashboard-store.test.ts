@@ -54,7 +54,7 @@ describe('DashboardStore', () => {
     const incident = await store.publish({ ...input, newsworthinessScore: 3, buffInterestScore: 5, assignmentDeskScore: 4 });
     const liveCall = await store.recordLiveCall({
       sourceId: 'score-test', occurredAt: input.occurredAt, agency: 'FDNY', borough: 'Manhattan',
-      transcript: 'Elevated assignment', category: 'newsworthy', summary: 'Elevated assignment.',
+      transcript: 'Elevated assignment', headline: 'Units Responding to Reported Fire', category: 'newsworthy', summary: 'Elevated assignment.',
       confidence: 0.9, newsworthinessScore: 3, buffInterestScore: 5, assignmentDeskScore: 4
     });
 
@@ -64,6 +64,7 @@ describe('DashboardStore', () => {
     assert.equal(liveCall.newsworthinessScore, 3);
     assert.equal(liveCall.buffInterestScore, 5);
     assert.equal(liveCall.assignmentDeskScore, 4);
+    assert.equal(liveCall.headline, 'Units Responding to Reported Fire');
   });
 
   it('indexes explicit acting-as unit identities in incident call history', async () => {

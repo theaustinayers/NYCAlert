@@ -79,8 +79,11 @@ describe('DashboardServer account routes', () => {
       assert.equal(home.status, 200);
       const homeHtml = await home.text();
       assert.match(homeHtml, /href="https:\/\/discord\.gg\/gcfCBkMG8C"[^>]*>Join Our Discord<\/a>/);
-      assert.match(homeHtml, /<span class="stat-label">MONITORING<\/span>/);
-      assert.match(homeHtml, /<span class="stat-caption">AI-SELECTED SUMMARIES ONLY<\/span>/);
+      assert.match(homeHtml, /<span class="stat-label">REAL-TIME USERS<\/span>/);
+      assert.match(homeHtml, /id="presence-total"/);
+      assert.match(homeHtml, /id="presence-buff"/);
+      assert.match(homeHtml, /id="presence-news"/);
+      assert.match(homeHtml, /AI-SELECTED SUMMARIES ONLY/);
       assert.match(homeHtml, /href="https:\/\/buymeacoffee\.com\/nycalert"[^>]*aria-label="Donate to NYC Alert on Buy Me a Coffee"/);
       assert.match(homeHtml, /SUPPORT NYC ALERT<\/span><strong>Donate<\/strong><span class="stat-caption">BUY ME A COFFEE/);
       assert.doesNotMatch(homeHtml, /ACTIVE AGENCIES/);
@@ -226,6 +229,51 @@ describe('DashboardServer account routes', () => {
       assert.deepEqual((await saved.json() as { preferences: unknown }).preferences, expected);
       const loaded = await fetch(`${origin}/api/account/preferences`, { headers: { Cookie: cookie } });
       assert.deepEqual((await loaded.json() as { preferences: unknown }).preferences, expected);
+    } finally { await server.stop(); }
+  });
+
+  it('reports aggregate active users and derives audience counts from authenticated sessions', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const accounts = new AccountStore(join(testDirectory, 'active-presence'));
+    await accounts.init();
+    for (const accountType of ['buff', 'news'] as const) {
+      const registered = await accounts.register({
+        firstName: 'Presence', lastName: accountType, email: `presence-${accountType}@example.test`, phone: '2125550100',
+        usageCase: 'Testing real-time active audience counts.', accountType, password: 'Strong-test-password-123'
+      });
+      const verified = await accounts.verifyEmail(registered.verificationToken);
+      await accounts.updateAccount(verified.id, { status: 'approved' });
+    }
+    const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
+      publicUrl: origin, trustProxy: true, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+    });
+    await server.start();
+    try {
+      const cookies: Record<'buff' | 'news', string> = { buff: '', news: '' };
+      for (const accountType of ['buff', 'news'] as const) {
+        const login = await fetch(`${origin}/api/auth/login`, {
+          method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: `presence-${accountType}@example.test`, password: 'Strong-test-password-123' })
+        });
+        assert.equal(login.status, 200);
+        cookies[accountType] = login.headers.get('set-cookie')?.split(';')[0] ?? '';
+      }
+      const heartbeat = async (browserToken: string, cookie?: string, spoofAudience?: string) => fetch(`${origin}/api/presence`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+        body: JSON.stringify({ browserToken, audience: spoofAudience })
+      });
+      assert.equal((await heartbeat('00000000-0000-4000-8000-000000000101')).status, 200);
+      assert.equal((await heartbeat('00000000-0000-4000-8000-000000000102', cookies.buff, 'news')).status, 200);
+      const newsPresence = await heartbeat('00000000-0000-4000-8000-000000000103', cookies.news, 'buff');
+      assert.deepEqual((await newsPresence.json() as { counts: unknown }).counts, { total: 3, buff: 1, newsMedia: 1 });
+
+      const crossOrigin = await fetch(`${origin}/api/presence`, {
+        method: 'POST', headers: { Origin: 'https://attacker.example', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ browserToken: '00000000-0000-4000-8000-000000000104' })
+      });
+      assert.equal(crossOrigin.status, 403);
+      assert.equal((await fetch(`${origin}/api/presence`)).status, 405);
     } finally { await server.stop(); }
   });
 

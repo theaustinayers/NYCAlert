@@ -37,6 +37,10 @@
   .stat-card { min-width: 0; padding: 11px; }
   .stat-card strong { font-size: 21px; }
   .stat-caption { font-size: 8px; }
+  .stat-card-status { justify-content: center; gap: 2px; }
+  .stat-card-status > strong { margin: 4px 0 1px; color: #e8eef6; font: 700 23px var(--display); letter-spacing: -.04em; }
+  .stat-card-status > .stat-caption { font: 9px var(--mono); letter-spacing: .04em; }
+  .stat-card-status > .stat-monitoring-caption { margin-top: 4px; color: #718096; font: 8px var(--mono); letter-spacing: .02em; }
   .incidents-header { margin-top: 16px; }
   .view-tab { flex: 1 0 auto; min-height: 42px; padding: 9px 10px; }
   .filter-row { gap: 7px; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 5px; }
@@ -167,3 +171,6 @@
   .page-intro-brand { min-width: 0; width: 100%; }
   .homepage-wordmark { display: block; width: min(100%, 620px); height: auto; margin: 5px 0 8px; }
 }
+
+/* Style the generated Live Radio call title as the card’s clear title treatment, replacing the address line without adding visual clutter. */
+.live-call-generated-title{display:grid;gap:4px;margin:8px 0 10px;padding-left:9px;border-left:2px solid var(--cyan)}.live-call-generated-title>span{color:#72859a;font:8px var(--mono);letter-spacing:.09em}.live-call-generated-title>strong{color:#edf4fa;font:700 15px/1.4 var(--display);overflow-wrap:anywhere}
