@@ -222,4 +222,84 @@ describe('isSameIncident', () => {
       ...initial, incidentType: 'fire', occurredAt: initial.occurredAt + 60_000
     }), false);
   });
+
+  it('matches an FDNY and NYPD follow-up with the same exact address, type, time, and specific event', () => {
+    const fdny = {
+      ...initial,
+      agency: 'FDNY' as const,
+      incidentType: 'fire' as const,
+      location: '320 St. Nicholas Avenue, Manhattan',
+      eventDescription: 'Fire reported in an occupied apartment building',
+      unitIds: ['ENGINE 12'],
+      occurredAt: 20_000_000
+    };
+    const nypd = {
+      ...fdny,
+      agency: 'NYPD' as const,
+      eventDescription: 'NYPD units assisting at a reported fire in an occupied apartment building',
+      unitIds: ['NYPD CAR 1234'],
+      occurredAt: fdny.occurredAt + 2 * 60_000
+    };
+    assert.equal(isSameIncident(fdny, nypd), true);
+  });
+
+  it('rejects cross-agency matches based only on same-borough generic wording', () => {
+    const fdny = {
+      ...initial,
+      agency: 'FDNY' as const,
+      incidentType: 'fire' as const,
+      location: 'Queens',
+      eventDescription: 'Reported fire in a building',
+      unitIds: [],
+      occurredAt: 20_000_000
+    };
+    assert.equal(isSameIncident(fdny, {
+      ...fdny,
+      agency: 'NYPD',
+      eventDescription: 'Reported fire in another building',
+      occurredAt: fdny.occurredAt + 30_000
+    }), false);
+  });
+
+  it('rejects cross-agency reports with conflicting explicit addresses or incident types', () => {
+    const fdny = {
+      ...initial,
+      agency: 'FDNY' as const,
+      incidentType: 'fire' as const,
+      location: '320 St. Nicholas Avenue',
+      eventDescription: 'Fire reported in an occupied apartment building',
+      unitIds: [],
+      occurredAt: 20_000_000
+    };
+    assert.equal(isSameIncident(fdny, {
+      ...fdny,
+      agency: 'NYPD',
+      location: '359 West 126th Street',
+      occurredAt: fdny.occurredAt + 30_000
+    }), false);
+    assert.equal(isSameIncident(fdny, {
+      ...fdny,
+      agency: 'NYPD',
+      incidentType: 'vehicle',
+      occurredAt: fdny.occurredAt + 30_000
+    }), false);
+  });
+
+  it('does not link FDNY and NYPD reports using shared unit numbers or code-like wording alone', () => {
+    const fdny = {
+      ...initial,
+      agency: 'FDNY' as const,
+      incidentType: 'other' as const,
+      location: '320 St. Nicholas Avenue',
+      eventDescription: '10-10 reported',
+      unitIds: ['ENGINE 12'],
+      occurredAt: 20_000_000
+    };
+    assert.equal(isSameIncident(fdny, {
+      ...fdny,
+      agency: 'NYPD',
+      unitIds: ['ENGINE 12'],
+      occurredAt: fdny.occurredAt + 30_000
+    }), false);
+  });
 });

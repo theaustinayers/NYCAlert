@@ -108,6 +108,20 @@ describe('DashboardStore', () => {
     assert.equal(store.search('Rescue 1 remains').length, 1);
   });
 
+  it('preserves primary agency while recording a cross-agency follow-up source', async () => {
+    const store = new DashboardStore(false);
+    const incident = await store.publish({ ...input, headline: 'Reported Fire', incidentType: 'fire' });
+    const updated = await store.updateIncident(incident.id, {
+      agency: 'NYPD', headline: 'Units Assisting', summary: 'NYPD reports units assisting at the fire.',
+      occurredAt: new Date('2026-01-01T12:03:00Z'), unitIds: ['NYPD CAR 1234'], confidence: 0.9,
+      newsworthinessScore: 4, category: 'newsworthy'
+    });
+
+    assert.equal(updated?.agency, 'FDNY');
+    assert.deepEqual(updated?.agencies, ['FDNY', 'NYPD']);
+    assert.equal(updated?.updates[0]?.agency, 'NYPD');
+  });
+
   it('upgrades a generic incident title when a follow-up identifies smoke from the roof', async () => {
     const store = new DashboardStore(false);
     const incident = await store.publish({

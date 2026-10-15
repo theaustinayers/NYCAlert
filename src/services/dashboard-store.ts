@@ -36,6 +36,7 @@ export interface DashboardIncident {
   occurredAt: string;
   updatedAt: string;
   agency: Agency;
+  agencies: Agency[];
   borough: Borough | 'Citywide';
   category: AlertCategory;
   location?: string;
@@ -47,7 +48,7 @@ export interface DashboardIncident {
   unitAssignments: RadioUnitAssignment[];
   boxNumbers: string[];
   updateCount: number;
-  updates: Array<{ headline?: string; summary: string; occurredAt: string; unitIds: string[]; unitAssignments: RadioUnitAssignment[]; boxNumbers: string[] }>;
+  updates: Array<{ agency: Agency; headline?: string; summary: string; occurredAt: string; unitIds: string[]; unitAssignments: RadioUnitAssignment[]; boxNumbers: string[] }>;
   confidence: number;
   newsworthinessScore: number;
   buffInterestScore: number;
@@ -60,6 +61,7 @@ export interface DashboardIncidentUpdateInput {
   headline?: string;
   summary: string;
   occurredAt: Date;
+  agency?: Agency;
   location?: string;
   incidentType?: IncidentType;
   latitude?: number;
@@ -229,6 +231,7 @@ export class DashboardStore {
       occurredAt: input.occurredAt.toISOString(),
       updatedAt: input.occurredAt.toISOString(),
       agency: input.agency,
+      agencies: [input.agency],
       borough: input.borough,
       ...(input.location ? { location: input.location.slice(0, 180) } : {}),
       ...(input.incidentType ? { incidentType: input.incidentType } : {}),
@@ -289,6 +292,7 @@ export class DashboardStore {
     const locationChanged = input.location !== undefined && input.location !== current.location;
     const updated: DashboardIncident = {
       ...current,
+      agencies: [...new Set([...current.agencies, input.agency ?? current.agency])],
       title: formatIncidentTitle(
         headline,
         input.location ?? current.location,
@@ -306,6 +310,7 @@ export class DashboardStore {
       boxNumbers: normalizeBoxNumbers([...current.boxNumbers, ...(input.boxNumbers ?? [])]),
       updateCount: current.updateCount + 1,
       updates: [...current.updates, {
+        agency: input.agency ?? current.agency,
         ...(input.headline && !isGenericIncidentHeadline(input.headline) ? { headline: normalizeIncidentHeadline(input.headline, input.category) } : {}),
         summary: input.summary.slice(0, 700),
         occurredAt: input.occurredAt.toISOString(),

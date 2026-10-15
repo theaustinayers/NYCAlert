@@ -159,6 +159,36 @@ function explicitAddressesConflict(left?: string, right?: string): boolean {
   return first.houseNumber !== second.houseNumber || first.street !== second.street;
 }
 
+function sameExplicitStreetAddress(left?: string, right?: string): boolean {
+  const first = explicitStreetAddress(left);
+  const second = explicitStreetAddress(right);
+  return Boolean(first && second && first.houseNumber === second.houseNumber && first.street === second.street);
+}
+
+const crossAgencyEventTerms = new Set([
+  'fire', 'shooting', 'shots', 'robbery', 'assault', 'crash', 'collision', 'vehicle',
+  'rescue', 'explosion', 'gas', 'collapse', 'stabbing', 'pedestrian', 'hazmat'
+]);
+
+function sharesSpecificCrossAgencyEvent(left?: string, right?: string): boolean {
+  const terms = (value?: string) => new Set((value?.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+    .filter((term) => crossAgencyEventTerms.has(term) || (term.length > 2 && !ignoredIncidentWords.has(term))));
+  const leftTerms = terms(left);
+  const rightTerms = terms(right);
+  return [...leftTerms].some((term) => crossAgencyEventTerms.has(term) && rightTerms.has(term));
+}
+
+function sameCrossAgencyIncident(existing: IncidentIdentity, incoming: IncidentIdentity, age: number): boolean {
+  if (existing.borough !== incoming.borough || age > 5 * 60 * 1000
+    || !compatibleType(existing.incidentType, incoming.incidentType)
+    || explicitAddressesConflict(existing.location, incoming.location)) return false;
+  if (coordinatesConflict(existing, incoming, 150)) return false;
+  const exactAddress = sameExplicitStreetAddress(existing.location, incoming.location);
+  const exactCoordinates = sameCoordinates(existing, incoming);
+  return (exactAddress || exactCoordinates)
+    && sharesSpecificCrossAgencyEvent(existing.eventDescription, incoming.eventDescription);
+}
+
 function normalizedCrossStreet(value: string): string {
   return normalizeMapLocation(value)
     .toLowerCase()
@@ -257,7 +287,8 @@ function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number):
 /** Require same responder/area, incident class and a corroborating location or unit signal. */
 export function isSameIncident(existing: IncidentIdentity, incoming: IncidentIdentity, maxAgeMs = 30 * 60 * 1000): boolean {
   const age = incoming.occurredAt - existing.occurredAt;
-  if (existing.agency !== incoming.agency || age < 0 || age > maxAgeMs) return false;
+  if (age < 0 || age > maxAgeMs) return false;
+  if (existing.agency !== incoming.agency) return sameCrossAgencyIncident(existing, incoming, age);
   if (explicitAddressesConflict(existing.location, incoming.location)) return false;
   const sameBorough = existing.borough === incoming.borough;
   const unitMatch = hasSharedUnit(existing.unitIds, incoming.unitIds);

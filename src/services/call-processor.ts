@@ -401,6 +401,7 @@ export class CallProcessor {
         }
       }
       const updated = await this.dashboard.updateIncident(matchingIncident.id, {
+        agency: call.agency,
         headline: triage.headline,
         summary: triage.summary,
         occurredAt: call.occurredAt,

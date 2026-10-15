@@ -12,7 +12,7 @@ after(async () => rm(testDirectory, { recursive: true, force: true }));
 const incident: DashboardIncident = {
   id: 'incident-vote-test', title: 'Reported Fire', summary: 'Fire reported.',
   occurredAt: '2026-10-14T12:00:00.000Z', updatedAt: '2026-10-14T12:00:00.000Z',
-  agency: 'FDNY', borough: 'Queens', category: 'newsworthy', incidentType: 'fire',
+  agency: 'FDNY', agencies: ['FDNY'], borough: 'Queens', category: 'newsworthy', incidentType: 'fire',
   location: '123 Main Street', locationPrecision: 'street_address', unitIds: [], unitAssignments: [], boxNumbers: [],
   updateCount: 0, updates: [], confidence: 0.9, newsworthinessScore: 4, buffInterestScore: 4,
   assignmentDeskScore: 4, hasAudio: false
