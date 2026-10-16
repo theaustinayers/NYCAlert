@@ -944,7 +944,7 @@ export class DashboardServer {
         const query = (url.searchParams.get('q') ?? '').trim().toLowerCase();
         const status = url.searchParams.get('status');
         const accounts = this.accounts.listAdminAccounts().filter((account) => {
-          const matchesQuery = !query || `${account.firstName} ${account.lastName} ${account.email} ${account.accountType}`.toLowerCase().includes(query);
+          const matchesQuery = !query || `${account.firstName} ${account.lastName} ${account.email} ${account.accountType} ${account.newsOutlet || ''}`.toLowerCase().includes(query);
           return matchesQuery && (!status || account.status === status);
         });
         json(response, 200, { accounts });
@@ -1551,7 +1551,7 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
 }
 
 function validateRegistration(body: Record<string, unknown>): {
-  username: string; firstName: string; lastName: string; email: string; phone: string; usageCase: string; accountType: AudienceAccountType; password: string;
+  username: string; firstName: string; lastName: string; email: string; phone: string; usageCase: string; newsOutlet?: string; accountType: AudienceAccountType; password: string;
 } {
   const username = textForUsername(body.username);
   const text = (key: string, max: number): string => typeof body[key] === 'string' ? body[key].trim().slice(0, max) : '';
@@ -1569,7 +1569,9 @@ function validateRegistration(body: Record<string, unknown>): {
   if (usageCase.length < 10) throw new Error('Please describe how you will use the account (at least 10 characters).');
   if (password.length < 12 || password.length > 128) throw new Error('Password must be between 12 and 128 characters.');
   if (accountType !== 'buff' && accountType !== 'news') throw new Error('Choose Buff or News Media account access.');
-  return { username, firstName, lastName, email, phone, usageCase, accountType, password };
+  const newsOutlet = typeof body.newsOutlet === 'string' ? body.newsOutlet.trim() : '';
+  if (accountType === 'news' && (!newsOutlet || newsOutlet.length > 160)) throw new Error('Enter your News Outlet / Publication (up to 160 characters).');
+  return { username, firstName, lastName, email, phone, usageCase, ...(accountType === 'news' ? { newsOutlet } : {}), accountType, password };
 }
 
 function textForUsername(value: unknown): string {

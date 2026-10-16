@@ -317,10 +317,14 @@ async function loadUsers() {
 function renderUsers() {
   const query = $('#user-search').value.trim().toLowerCase();
   const status = $('#user-status').value;
-  const users = state.users.filter((user) => (!query || `${user.username} ${user.firstName} ${user.lastName} ${user.email} ${user.accountType}`.toLowerCase().includes(query)) && (status === 'all' || user.status === status));
+  const users = state.users.filter((user) => (!query || `${user.username} ${user.firstName} ${user.lastName} ${user.email} ${user.accountType} ${user.newsOutlet || ''}`.toLowerCase().includes(query)) && (status === 'all' || user.status === status));
   const table = $('#users-table');
   if (!users.length) { table.innerHTML = '<tr><td colspan="6">No users match these filters.</td></tr>'; return; }
   table.innerHTML = users.map((user) => `<tr data-user-id="${escapeHtml(user.id)}"><td><div class="admin-user-cell"><strong>@${escapeHtml(user.username)}</strong><small>Private account name: ${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)}</small><small>${escapeHtml(user.email)}</small><small>${escapeHtml(user.phone || '')}</small></div></td><td><span class="admin-badge">${escapeHtml(user.accountType)}</span><small>${user.usageCase ? `<br>${escapeHtml(user.usageCase)}` : ''}</small></td><td><span class="admin-badge ${escapeHtml(user.status)}">${escapeHtml(user.status)}</span>${user.webhookAccessSuspended ? '<small><br>Webhook access suspended</small>' : ''}${user.communityUpdatesSuspended ? '<small><br>Community updates suspended</small>' : ''}</td><td>${user.emailVerified ? 'Verified' : 'No'}</td><td>${escapeHtml(formatTime(user.createdAt))}</td><td><div class="admin-row-actions">${user.emailVerified && user.status !== 'approved' ? '<button class="approve" data-user-action="approved">Approve</button>' : ''}${user.status !== 'suspended' ? '<button data-user-action="suspended">Suspend</button>' : '<button data-user-action="pending-approval">Restore</button>'}<button data-webhook-access="${user.webhookAccessSuspended ? 'false' : 'true'}">${user.webhookAccessSuspended ? 'Restore hooks' : 'Suspend hooks'}</button><button data-community-updates="${user.communityUpdatesSuspended ? 'false' : 'true'}">${user.communityUpdatesSuspended ? 'Restore comments' : 'Suspend comments'}</button><button class="danger" data-user-delete="true">Delete</button></div></td></tr>`).join('');
+  for (const user of users.filter((item) => item.accountType === 'news')) {
+    const row = $$('[data-user-id]', table).find((item) => item.dataset.userId === user.id);
+    row?.querySelector('td:nth-child(2)')?.insertAdjacentHTML('beforeend', `<small><br>News Outlet / Publication: ${escapeHtml(user.newsOutlet || 'Not provided')}</small>`);
+  }
   if (state.isAdmin) {
     for (const user of users.filter((item) => !item.emailVerified && item.status === 'pending-verification')) {
       const row = $$('[data-user-id]', table).find((item) => item.dataset.userId === user.id);

@@ -278,13 +278,13 @@ describe('DashboardServer account routes', () => {
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
-      assert.match(html, /\/admin\.js\?v=verification-resend-20261016-1/);
+      assert.match(html, /\/admin\.js\?v=news-outlet-registration-20261016-1/);
       assert.match(html, /id="update-website"/);
       const wordmark = await fetch(`${origin}/nyc-alert-wordmark.svg`);
       assert.equal(wordmark.status, 200);
       assert.match(wordmark.headers.get('content-type') ?? '', /image\/svg\+xml/);
       assert.match(await wordmark.text(), /NYC Alert/);
-      const script = await fetch(`${origin}/admin.js?v=verification-resend-20261016-1`);
+      const script = await fetch(`${origin}/admin.js?v=news-outlet-registration-20261016-1`);
       assert.equal(script.status, 200);
       assert.equal(script.headers.get('cache-control'), 'no-store');
       const adminScript = await script.text();
@@ -377,6 +377,38 @@ describe('DashboardServer account routes', () => {
     } finally {
       await server.stop();
     }
+  });
+
+  it('requires an outlet for News Media registration and exposes it only for staff review', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const directory = join(testDirectory, 'news-outlet-registration');
+    const accounts = new AccountStore(directory);
+    await accounts.init();
+    const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
+      publicUrl: origin, trustProxy: true, sendEmail: async () => {}
+    });
+    await server.start();
+    const input = { username: 'outlet_user', firstName: 'Test', lastName: 'User', email: 'outlet@example.test', phone: '2125550100', usageCase: 'Testing news outlet registration.', accountType: 'news', password: 'Strong-test-password-123' };
+    const register = (body: unknown) => fetch(`${origin}/api/auth/register`, {
+      method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    try {
+      assert.equal((await register(input)).status, 400);
+      assert.equal((await register({ ...input, newsOutlet: '   ' })).status, 400);
+      assert.equal((await register({ ...input, newsOutlet: 'x'.repeat(161) })).status, 400);
+      assert.equal((await register({ ...input, newsOutlet: '  Example Daily  ' })).status, 201);
+      const reopened = new AccountStore(directory);
+      await reopened.init();
+      assert.equal(reopened.listAdminAccounts()[0]?.newsOutlet, 'Example Daily');
+      assert.equal('newsOutlet' in reopened.listAccounts()[0]!, false);
+      const cookie = `nycalert_session=${accounts.createAdminSession()}`;
+      const reviewed = await fetch(`${origin}/api/admin/accounts?q=Example%20Daily`, { headers: { Cookie: cookie } });
+      const data = await reviewed.json() as { accounts: Array<{ newsOutlet?: string }> };
+      assert.equal(data.accounts.length, 1);
+      assert.equal(data.accounts[0]?.newsOutlet, 'Example Daily');
+      assert.equal((await register({ ...input, username: 'buff_outlet', email: 'buff-outlet@example.test', accountType: 'buff' })).status, 201);
+    } finally { await server.stop(); }
   });
 
   it('resends verification from admin, login, and registration without bypassing account approval', async () => {

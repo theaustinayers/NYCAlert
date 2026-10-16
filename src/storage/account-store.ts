@@ -33,6 +33,7 @@ export interface AccountRecord {
   email: string;
   phone: string;
   usageCase: string;
+  newsOutlet?: string;
   accountType: AudienceAccountType | 'reviewer';
   isAdmin?: boolean;
   adminRole?: Exclude<AdminRole, 'owner'>;
@@ -50,7 +51,7 @@ export interface AccountRecord {
   dashboardPreferences?: DashboardPreferences;
 }
 export interface PublicAccount { id: string; username: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: AccountRoleName; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhookSummary[]; webhookAccessSuspended: boolean; communityUpdatesSuspended: boolean; dashboardPreferences?: DashboardPreferences; }
-export interface AdminAccount extends PublicAccount { firstName: string; lastName: string; phone: string; usageCase: string; }
+export interface AdminAccount extends PublicAccount { firstName: string; lastName: string; phone: string; usageCase: string; newsOutlet?: string; }
 
 export class EmailVerificationRequiredError extends Error {
   constructor(readonly account: PublicAccount) {
@@ -96,7 +97,7 @@ export class AccountStore {
     this.initialized = true;
   }
 
-  async register(input: { username: string; firstName: string; lastName: string; email: string; phone: string; usageCase: string; accountType: AudienceAccountType; password: string }): Promise<{ account: PublicAccount; verificationToken: string }> {
+  async register(input: { username: string; firstName: string; lastName: string; email: string; phone: string; usageCase: string; newsOutlet?: string; accountType: AudienceAccountType; password: string }): Promise<{ account: PublicAccount; verificationToken: string }> {
     const email = input.email.trim().toLowerCase();
     if (this.accounts.some((account) => account.email === email)) throw new Error('An account already exists for this email. Try logging in or contact support.');
     const username = this.requireAvailableUsername(input.username);
@@ -107,6 +108,7 @@ export class AccountStore {
       username,
       firstName: input.firstName.trim().slice(0, 80), lastName: input.lastName.trim().slice(0, 80), email,
       phone: input.phone.trim().slice(0, 40), usageCase: input.usageCase.trim().slice(0, 1000),
+      ...(input.accountType === 'news' && input.newsOutlet?.trim() ? { newsOutlet: input.newsOutlet.trim().slice(0, 160) } : {}),
       accountType: input.accountType, status: 'pending-verification', createdAt: new Date().toISOString(),
       passwordSalt: salt, passwordHash: hashPassword(input.password, salt), verificationTokenHash: hashToken(token),
       verificationExpiresAt: Date.now() + verifyLifetimeMs, webhooks: []
@@ -226,7 +228,8 @@ export class AccountStore {
   listAccounts(): PublicAccount[] { return this.accounts.map((account) => this.publicView(account)); }
   listAdminAccounts(): AdminAccount[] {
     return this.accounts.filter((account) => !account.isAdmin).map((account) => ({
-      ...this.publicView(account), firstName: account.firstName, lastName: account.lastName, phone: account.phone, usageCase: account.usageCase
+      ...this.publicView(account), firstName: account.firstName, lastName: account.lastName, phone: account.phone, usageCase: account.usageCase,
+      ...(account.newsOutlet ? { newsOutlet: account.newsOutlet } : {})
     }));
   }
   listAdministrators(): AdminAccount[] {

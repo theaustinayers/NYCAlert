@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 
 export interface EmailMessage {
   to: string;
@@ -10,16 +11,24 @@ export interface EmailMessage {
 
 const phpMailScript = `
 $message = json_decode(stream_get_contents(STDIN), true, 512, JSON_THROW_ON_ERROR);
-$boundary = 'nycalert_' . bin2hex(random_bytes(16));
-$headers = "From: " . $message['from'] . "\\r\\nMIME-Version: 1.0\\r\\nContent-Type: multipart/alternative; boundary=\\\"" . $boundary . "\\\"";
-$body = "--" . $boundary . "\\r\\nContent-Type: text/plain; charset=UTF-8\\r\\nContent-Transfer-Encoding: 8bit\\r\\n\\r\\n"
-    . $message['text'] . "\\r\\n--" . $boundary . "\\r\\nContent-Type: text/html; charset=UTF-8\\r\\nContent-Transfer-Encoding: 8bit\\r\\n\\r\\n"
-    . $message['html'] . "\\r\\n--" . $boundary . "--\\r\\n";
-if (!mail($message['to'], $message['subject'], $body, $headers, '-f noreply@nycalert.ai')) {
+$headers = "From: " . $message['from'] . "\\r\\nMIME-Version: 1.0\\r\\nContent-Type: multipart/alternative; boundary=\\\"" . $message['boundary'] . "\\\"";
+if (!mail($message['to'], $message['subject'], $message['body'], $headers, '-f noreply@nycalert.ai')) {
     fwrite(STDERR, 'PHP mail() rejected the message.');
     exit(1);
 }
 `;
+
+export function buildMailBody(message: Pick<EmailMessage, 'text' | 'html'>): { boundary: string; body: string } {
+  const boundary = `nycalert_${randomBytes(16).toString('hex')}`;
+  const part = (type: string, content: string): string => {
+    const normalized = content.replace(/\r\n|\r|\n/g, '\r\n');
+    const encoded = Buffer.from(normalized, 'utf8').toString('base64').match(/.{1,76}/g)?.join('\r\n') ?? '';
+    return `--${boundary}\r\nContent-Type: ${type}; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${encoded}\r\n`;
+  };
+  // Encode before Postfix/OpenDKIM sees the body, preventing SMTP line wrapping
+  // and 8-bit downgrades from changing content after the signature is created.
+  return { boundary, body: part('text/plain', message.text) + part('text/html', message.html) + `--${boundary}--\r\n` };
+}
 
 export function sendPhpMail(message: EmailMessage): Promise<void> {
   const binaries = [process.env.PHP_MAIL_BINARY, '/usr/bin/php', 'php'].filter((value, index, list): value is string => {
@@ -56,7 +65,7 @@ export function sendPhpMail(message: EmailMessage): Promise<void> {
         errors.push(`${binary}: ${errorOutput.trim() || `exit ${code ?? 'unknown'}`}`);
         reject(new Error(errors.join(' | ')));
       });
-      child.stdin.end(JSON.stringify(message));
+      child.stdin.end(JSON.stringify({ to: message.to, from: message.from, subject: message.subject, ...buildMailBody(message) }));
     };
     tryBinary(0);
   });

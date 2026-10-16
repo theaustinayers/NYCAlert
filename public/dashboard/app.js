@@ -1374,10 +1374,22 @@ function renderAuthForm(mode) {
       <label class="auth-field full">PHONE<input name="phone" type="tel" autocomplete="tel" maxlength="40" required></label>
       <label class="auth-field">REQUESTED VIEW<select name="accountType"><option value="buff" ${defaultAudience === 'buff' ? 'selected' : ''}>Buff</option><option value="news" ${defaultAudience === 'news' ? 'selected' : ''}>News Media</option></select></label>
       <label class="auth-field">PASSWORD (12+ CHARACTERS)<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+      <label class="auth-field full" data-news-outlet hidden>NEWS OUTLET / PUBLICATION<input name="newsOutlet" autocomplete="organization" maxlength="160" disabled><small>Required for News Media accounts. Shared with staff reviewing your registration, not shown publicly.</small></label>
       <label class="auth-field full">HOW WILL YOU USE THIS ACCOUNT?<textarea name="usageCase" minlength="10" maxlength="1000" required></textarea></label>
       <button class="auth-form-submit" type="submit">Register for review</button>
       <p class="auth-switch">Already registered? <button type="button" data-auth-mode="login">Log in</button></p>`;
+    const syncNewsOutlet = () => {
+      const isNews = form.elements.namedItem('accountType').value === 'news';
+      form.querySelector('[data-news-outlet]').hidden = !isNews;
+      const outlet = form.elements.namedItem('newsOutlet');
+      outlet.required = isNews;
+      outlet.disabled = !isNews;
+    };
+    form.elements.namedItem('accountType').addEventListener('change', syncNewsOutlet);
+    form.onreset = () => queueMicrotask(syncNewsOutlet);
+    syncNewsOutlet();
   } else {
+    form.onreset = null;
     form.innerHTML = `
       <label class="auth-field full">EMAIL<input name="email" type="email" autocomplete="username" maxlength="254" required></label>
       <label class="auth-field full">PASSWORD<input name="password" type="password" autocomplete="current-password" maxlength="128" required></label>
