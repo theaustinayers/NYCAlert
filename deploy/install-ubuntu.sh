@@ -34,6 +34,8 @@ fi
 if [[ -f /etc/opendkim.conf ]]; then
   cp -a /etc/opendkim.conf "/etc/opendkim.conf.nycalert.bak.$(date +%Y%m%d%H%M%S)"
 fi
+# Remove the old invalid outbound milter setting if this installer is rerun.
+postconf -X smtp_milters
 postconf -e 'myhostname = mail.nycalert.ai'
 postconf -e 'myorigin = nycalert.ai'
 postconf -e 'mydestination = localhost'
@@ -68,11 +70,13 @@ TRUSTED
 chown root:opendkim /etc/opendkim.conf /etc/opendkim/trusted.hosts
 chmod 0640 /etc/opendkim.conf /etc/opendkim/trusted.hosts
 postconf -e 'smtpd_milters = inet:127.0.0.1:8891'
-postconf -e 'smtp_milters = inet:127.0.0.1:8891'
+postconf -e 'non_smtpd_milters = inet:127.0.0.1:8891'
 postconf -e 'milter_default_action = accept'
 postconf -e 'milter_protocol = 6'
 systemctl enable --now opendkim
 systemctl enable --now postfix
+systemctl restart opendkim
+systemctl restart postfix
 
 # Install Node.js 22 LTS from the NodeSource APT repository.
 install -d -m 0755 /etc/apt/keyrings
