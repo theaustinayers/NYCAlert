@@ -491,6 +491,13 @@ function wireControls() {
   });
   $('#mdt-login-form').addEventListener('submit', submitMdtLogin);
   $('#mdt-xmit-form').addEventListener('submit', submitCommunityNote);
+  const messageEditor = $('#mdt-community-message');
+  $('#mdt-xmit').addEventListener('click', () => $('#mdt-xmit-form').requestSubmit());
+  messageEditor.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    $('#mdt-xmit-form').requestSubmit();
+  });
   $('#console-output').addEventListener('click', (event) => {
     const button = event.target.closest('[data-community-note-delete]');
     if (!button || state.authSession?.kind !== 'admin') return;
