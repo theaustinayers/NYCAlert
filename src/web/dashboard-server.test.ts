@@ -117,6 +117,7 @@ describe('DashboardServer account routes', () => {
       const html = await response.text();
       assert.match(html, /DISPATCH<br>INFO/);
       assert.match(html, /PREMISE<br>INFO/);
+      assert.match(html, /data-view="premise"/);
       assert.match(html, /COMMAND<br>HISTORY/);
       assert.match(html, /id="incident-stream"/);
       assert.match(html, /Copyright \(c\) 1989 - 2007/);
@@ -129,6 +130,10 @@ describe('DashboardServer account routes', () => {
       assert.match(html, /id="mdt-sound-toggle"/);
       assert.match(html, /id="mdt-incident-alert"/);
       assert.match(html, /id="mdt-xmit-form"/);
+      assert.match(html, /id="mdt-refresh"[^>]*>XMIT/);
+      assert.match(html, /id="mdt-xmit"[^>]*>XMIT<\/button><time id="mdt-clock"/);
+      assert.doesNotMatch(html, /id="mdt-last-sync"/);
+      assert.doesNotMatch(html, /id="mdt-last-sync"/);
       assert.match(html, /id="mdt-logon-modal"/);
       assert.match(html, /value="Manhattan"/);
       assert.match(html, /value="FDNY"/);
@@ -145,7 +150,7 @@ describe('DashboardServer account routes', () => {
       assert.match(emscadStylesText, /grid-template-columns:1\.3fr/);
       assert.match(emscadStylesText, /\.status-xmit/);
       assert.match(emscadStylesText, /\.community-note-role\.buff/);
-      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-4`);
+      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-7`);
       assert.equal(script.status, 200);
       const source = await script.text();
       assert.match(source, /incidents-updated/);
@@ -159,11 +164,18 @@ describe('DashboardServer account routes', () => {
       assert.match(source, /if \(!state\.started \|\| state\.hold\) return/);
       assert.match(source, /state\.selectedBoroughs/);
       assert.match(source, /state\.selectedAgencies/);
-      assert.match(source, /newestIncident/);
+      assert.match(source, /NEXT NEW CALL REPLACES THIS DISPLAY/);
+      assert.match(source, /state\.dispatchIncidentId = newlyArrived\[0\]\.id/);
+      assert.match(source, /matchesDispatchFilters\(incident\)/);
+      assert.match(source, /function loadPremiseHistory/);
+      assert.match(source, /normalizePremiseLocation\(incident\.location\)/);
+      assert.match(source, /between\\b\.\*\$\/i/);
+      assert.match(source, /Premise Info/);
       assert.match(source, /selectedBoroughs\.filter/);
       assert.match(source, /state\.hold = !state\.hold/);
       assert.match(source, /communityNotes/);
       assert.match(source, /\/api\/account\/incidents\//);
+      assert.match(source, /box\.replace\(\/\^BOX/);
       assert.match(source, /play < 4/);
       assert.match(source, /state\.hasLoadedSnapshot/);
       assert.match(source, /loadOlderIncidents/);

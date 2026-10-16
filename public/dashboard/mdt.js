@@ -15,6 +15,13 @@ const state = {
   queuedAlertSequences: 0,
   audioPlaying: false,
   currentIncidentId: null,
+  dispatchIncident: null,
+  dispatchIncidentId: null,
+  premiseResults: [],
+  premiseLoadedKey: '',
+  premiseLoadingKey: '',
+  premiseErrorKey: '',
+  xmitPrompted: false,
   xmitBusy: false,
   feedbackTimer: null,
   lastSignature: '',
@@ -85,8 +92,10 @@ async function loadIncidents({ announce = false, append = false } = {}) {
   }
   const scroll = $('#incident-stream');
   const wasAtBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 60;
+  const controller = new AbortController();
+  const requestTimeout = setTimeout(() => controller.abort(), 10_000);
   try {
-    const response = await fetch(`/api/v1/incidents?${params}`, { cache: 'no-store' });
+    const response = await fetch(`/api/v1/incidents?${params}`, { cache: 'no-store', signal: controller.signal });
     if (!response.ok) throw new Error(`Incident API returned ${response.status}`);
     const result = await response.json();
     if (state.hold) return;
@@ -97,8 +106,11 @@ async function loadIncidents({ announce = false, append = false } = {}) {
     if (!append && state.hasLoadedSnapshot) {
       const existingIds = new Set(state.incidents.map((incident) => incident.id));
       const newlyArrived = incidents.filter((incident) => !existingIds.has(incident.id)
-        && (!state.selectedAgencies || state.selectedAgencies.includes(incident.agency)));
-      if (newlyArrived.length) handleNewIncidents(newlyArrived.length);
+        && matchesDispatchFilters(incident));
+      if (newlyArrived.length) {
+        if (!state.hold && state.view === 'dispatch') state.dispatchIncidentId = newlyArrived[0].id;
+        handleNewIncidents(newlyArrived.length);
+      }
     }
     if (announce && !append && state.lastSignature && signature !== state.lastSignature) state.changeCount += 1;
     if (append) {
@@ -111,25 +123,34 @@ async function loadIncidents({ announce = false, append = false } = {}) {
       state.incidents = [...currentPage.values()];
       state.lastSignature = signature;
       state.hasLoadedSnapshot = true;
+      if (!state.dispatchIncidentId) state.dispatchIncidentId = incidents.find(matchesDispatchFilters)?.id ?? null;
     }
     state.nextOffset = offset + incidents.length;
     state.total = Number(result.page?.total) || incidents.length;
     state.hasMore = Boolean(result.page?.hasMore);
     render();
     $('#mdt-total').textContent = String(Number(result.page?.total) || incidents.length);
-    $('#mdt-last-sync').textContent = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false });
     if (wasAtBottom || state.following) scroll.scrollTop = scroll.scrollHeight;
   } catch {
     setConnection(false);
     if (!state.incidents.length) {
       $('#console-output').innerHTML = '<div class="stream-placeholder">Published incident records are temporarily unavailable. Retrying…</div>';
     }
+  } finally {
+    clearTimeout(requestTimeout);
   }
 }
 
 function setConnection(online) {
-  $('#mdt-connection').textContent = online ? 'INCIDENT FEED READY · PUBLIC DATA' : 'INCIDENT FEED RECONNECTING';
+  $('#mdt-connection').textContent = online ? 'INCIDENT FEED READY · PUBLIC DATA' : 'FEED UNAVAILABLE · RETRYING';
   $('#mdt-connection').classList.toggle('reconnecting', !online);
+}
+
+function matchesDispatchFilters(incident) {
+  const boroughMatches = !state.selectedBoroughs || state.selectedBoroughs.includes(incident.borough)
+    || (incident.borough === 'Citywide' && state.selectedBoroughs.length > 0);
+  const agencyMatches = !state.selectedAgencies || state.selectedAgencies.includes(incident.agency);
+  return boroughMatches && agencyMatches;
 }
 
 function handleNewIncidents(count) {
@@ -179,10 +200,10 @@ async function playQueuedIncidentAlerts() {
 
 function updateSoundControl() {
   const button = $('#mdt-sound-toggle');
-  button.innerHTML = state.soundEnabled ? 'SOUND<br>ON' : 'SOUND<br>OFF';
+  button.textContent = 'IR';
   button.classList.toggle('sound-enabled', state.soundEnabled);
   button.setAttribute('aria-pressed', String(state.soundEnabled));
-  button.title = state.soundEnabled ? 'Disable four-play incident alerts' : 'Enable four-play incident alerts';
+  button.title = state.soundEnabled ? 'IR alert sound enabled · click to disable' : 'IR alert sound disabled · click to enable';
 }
 
 async function toggleIncidentSound() {
@@ -256,20 +277,44 @@ function render() {
     updateXmitControls();
     return;
   }
+  if (state.view === 'premise') {
+    state.currentIncidentId = null;
+    filterPanel.hidden = true;
+    $('#mdt-load-older').hidden = true;
+    $('#stream-title').textContent = 'Premise Info';
+    renderPremiseHistory(output);
+    updateXmitControls();
+    return;
+  }
+  if (state.view === 'dispatch' && state.dispatchIncidentId) {
+    const active = state.incidents.find((incident) => incident.id === state.dispatchIncidentId && matchesDispatchFilters(incident));
+    if (!active) state.dispatchIncidentId = state.incidents.find(matchesDispatchFilters)?.id ?? null;
+  }
   const entries = buildEntries().filter((entry) => {
-    const boroughMatches = !state.selectedBoroughs || state.selectedBoroughs.includes(entry.borough)
-      || (entry.borough === 'Citywide' && state.selectedBoroughs.length > 0);
-    const agencyMatches = !state.selectedAgencies || state.selectedAgencies.includes(entry.agency);
-    return boroughMatches && agencyMatches;
+    return matchesDispatchFilters(entry.incident);
   });
-  let visible = entries.filter((entry) => state.view === 'dispatch' || state.view === 'history'
+  let visible = entries.filter((entry) => state.view === 'history'
     || (state.view === 'incidents' && entry.kind === 'new')
     || (state.view === 'updates' && entry.kind === 'update'));
-  if (state.view === 'dispatch' && visible.length) {
-    const newestIncident = [...visible].sort((left, right) => Date.parse(right.incident.occurredAt) - Date.parse(left.incident.occurredAt))[0];
-    visible = visible.filter((entry) => entry.incidentId === newestIncident.incidentId);
-    state.currentIncidentId = newestIncident.incidentId;
-  } else state.currentIncidentId = null;
+  if (state.view === 'dispatch' && state.dispatchIncidentId) {
+    visible = entries.filter((entry) => entry.incidentId === state.dispatchIncidentId);
+    state.dispatchIncident = state.incidents.find((incident) => incident.id === state.dispatchIncidentId) ?? null;
+    state.currentIncidentId = state.dispatchIncident?.id ?? null;
+  } else {
+    state.currentIncidentId = null;
+    if (state.view === 'dispatch') {
+      state.dispatchIncident = null;
+      if (!state.dispatchIncidentId) {
+        const first = state.incidents.find(matchesDispatchFilters);
+        if (first) {
+          state.dispatchIncidentId = first.id;
+          state.dispatchIncident = first;
+          state.currentIncidentId = first.id;
+          visible = entries.filter((entry) => entry.incidentId === first.id);
+        }
+      }
+    }
+  }
   if (!visible.length) {
     state.currentIncidentId = null;
     updateXmitControls();
@@ -287,6 +332,9 @@ function render() {
   }
   let currentDay = '';
   const markup = [];
+  if (state.view === 'dispatch') {
+    markup.push(`<div class="dispatch-mode-notice ${state.hold ? 'hold-active' : ''}">${state.hold ? 'HOLD ACTIVE · CURRENT CALL FROZEN · NEW CALLS QUEUED' : 'HOLD OFF · NEXT NEW CALL REPLACES THIS DISPLAY'}</div>`);
+  }
   for (const entry of visible) {
     const day = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'long', day: '2-digit', year: 'numeric' }).format(new Date(entry.at));
     if (day !== currentDay) {
@@ -296,7 +344,7 @@ function render() {
     const meta = [
       entry.location ? `<span class="entry-location"><strong>LOCATION</strong> ${escapeHtml(entry.location)}</span>` : '',
       entry.units.length ? `<span><strong>UNITS</strong> ${escapeHtml(entry.units.join(', '))}</span>` : '',
-      entry.boxes.length ? `<span><strong>BOX</strong> ${escapeHtml(entry.boxes.join(', '))}</span>` : '',
+      entry.boxes.length ? `<span><strong>BOX</strong> ${escapeHtml(entry.boxes.map((box) => box.replace(/^BOX(?:\s*(?:#|NO\.?)?)?\s*/i, '')).join(', '))}</span>` : '',
       entry.previousLocation ? `<span><strong>PREVIOUS LOCATION</strong> ${escapeHtml(entry.previousLocation)}</span>` : ''
     ].filter(Boolean).join('');
     if (entry.kind === 'community') {
@@ -313,6 +361,81 @@ function render() {
   }
   output.innerHTML = markup.join('');
   updateXmitControls();
+}
+
+function normalizePremiseLocation(value) {
+  return String(value ?? '').replace(/\s*,?\s+between\b.*$/i, '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+}
+
+function premiseLookupKey(incident) {
+  return incident?.id && incident.location ? `${incident.id}|${normalizePremiseLocation(incident.location)}` : '';
+}
+
+function renderPremiseHistory(output) {
+  const current = state.dispatchIncident;
+  if (!current) {
+    output.innerHTML = '<div class="stream-empty">OPEN DISPATCH INFO AND SELECT A CALL FIRST</div>';
+    return;
+  }
+  const key = premiseLookupKey(current);
+  if (!key) {
+    output.innerHTML = '<div class="stream-empty">NO ADDRESS IN CURRENT CALL · PREMISE HISTORY UNAVAILABLE</div>';
+    return;
+  }
+  if (state.premiseLoadingKey !== key && state.premiseLoadedKey !== key) void loadPremiseHistory(current, key);
+  if (state.premiseLoadingKey === key) {
+    output.innerHTML = `<div class="stream-empty">SEARCHING PUBLIC INCIDENT RECORDS · ${escapeHtml(current.location)}</div>`;
+    return;
+  }
+  if (state.premiseLoadedKey !== key) return;
+  const matches = state.premiseResults;
+  const header = `<div class="premise-heading"><span>PUBLIC INCIDENT HISTORY · ADDRESS MATCH</span><strong>${escapeHtml(current.location)}</strong><small>Current call: ${escapeHtml(current.agency)} · ${escapeHtml(current.borough)} · ${escapeHtml(formatStamp(current.occurredAt))}</small></div>`;
+  if (state.premiseErrorKey === key) {
+    output.innerHTML = `${header}<div class="stream-empty">PUBLIC INCIDENT HISTORY UNAVAILABLE</div>`;
+    return;
+  }
+  if (!matches.length) {
+    output.innerHTML = `${header}<div class="stream-empty">NO EARLIER PUBLISHED INCIDENTS FOUND AT THIS EXACT LOCATION</div>`;
+    return;
+  }
+  output.innerHTML = `${header}${matches.map((incident) => `<article class="incident-entry premise-entry" data-premise-id="${escapeHtml(incident.id)}">
+    <div class="entry-topline"><time class="entry-time">${escapeHtml(formatStamp(incident.occurredAt))}</time><span class="entry-kind">PRIOR INCIDENT</span><span class="entry-source">${escapeHtml(incident.agency)} · ${escapeHtml(incident.borough)}</span><a class="entry-open" href="/incident/${encodeURIComponent(incident.id)}">OPEN RECORD ↗</a></div>
+    <h2 class="entry-title">${escapeHtml(String(incident.title || 'Published incident').split(' | ')[0])}</h2><p class="entry-summary">${escapeHtml(incident.summary)}</p>
+    ${incident.updates?.length ? `<details class="premise-updates"><summary>${incident.updates.length} recorded update${incident.updates.length === 1 ? '' : 's'}</summary>${incident.updates.map((update) => `<p><time>${escapeHtml(formatStamp(update.occurredAt))}</time> · ${escapeHtml(update.agency || incident.agency)} · ${escapeHtml(update.summary)}</p>`).join('')}</details>` : ''}
+  </article>`).join('')}`;
+}
+
+async function loadPremiseHistory(current, key) {
+  state.premiseLoadingKey = key;
+  state.premiseErrorKey = '';
+  state.premiseResults = [];
+  renderPremiseHistory($('#console-output'));
+  const addressQuery = current.location.split(/\s*,?\s+between\b/i, 1)[0].trim();
+  const params = new URLSearchParams({ q: addressQuery, limit: '100', offset: '0' });
+  if (current.borough !== 'Citywide') params.append('borough', current.borough);
+  try {
+    const response = await fetch(`/api/v1/incidents?${params}`, { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Incident API returned ${response.status}`);
+    const result = await response.json();
+    if (premiseLookupKey(state.dispatchIncident) !== key) return;
+    const currentTime = Date.parse(current.occurredAt);
+    state.premiseResults = (Array.isArray(result.data) ? result.data : [])
+      .filter((incident) => incident.id !== current.id
+        && normalizePremiseLocation(incident.location) === normalizePremiseLocation(current.location)
+        && Date.parse(incident.occurredAt) < currentTime
+        && (!state.selectedAgencies || state.selectedAgencies.includes(incident.agency)))
+      .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt));
+    state.premiseLoadedKey = key;
+  } catch {
+    if (premiseLookupKey(state.dispatchIncident) !== key) return;
+    state.premiseResults = [];
+    state.premiseLoadedKey = key;
+    state.premiseErrorKey = key;
+  } finally {
+    if (state.premiseLoadingKey === key) state.premiseLoadingKey = '';
+    if (state.view === 'premise' && premiseLookupKey(state.dispatchIncident) === key) renderPremiseHistory($('#console-output'));
+  }
 }
 
 async function loadOlderIncidents(event) {
@@ -345,13 +468,11 @@ function wireControls() {
     button.classList.toggle('active', state.hold);
     button.setAttribute('aria-pressed', String(state.hold));
     button.setAttribute('aria-label', state.hold ? 'Hold active: pause new incident updates' : 'Hold inactive: receive incident updates');
+    render();
     if (!state.hold) void loadIncidents({ announce: true });
   });
   $('#mdt-sound-toggle').addEventListener('click', () => { void toggleIncidentSound(); });
-  $('#mdt-logon').addEventListener('click', () => {
-    if (state.authSession) void logoutFromMdt();
-    else openLogonModal();
-  });
+  $('#mdt-logon').addEventListener('click', openLogonModal);
   $('#mdt-logon-close').addEventListener('click', closeLogonModal);
   $('#mdt-logon-modal').addEventListener('click', (event) => {
     if (event.target === $('#mdt-logon-modal')) closeLogonModal();
@@ -387,6 +508,8 @@ function wireControls() {
       state.hasMore = false;
       state.lastSignature = '';
       state.hasLoadedSnapshot = false;
+      state.dispatchIncidentId = null;
+      state.dispatchIncident = null;
     }
     $$('[data-view]').forEach((item) => {
       const selected = item.dataset.view === 'dispatch';
@@ -403,7 +526,7 @@ function wireControls() {
     $('#mdt-message-filter-form').querySelectorAll('input[name="agency"]').forEach((input) => { input.checked = event.currentTarget.checked; });
   });
   $('#mdt-message-filter-form').querySelectorAll('input[name="borough"],input[name="agency"]').forEach((input) => input.addEventListener('change', updateAllFilterCheckboxes));
-  $('#mdt-refresh').addEventListener('click', () => { void loadIncidents({ announce: true }); });
+  $('#mdt-refresh').addEventListener('click', () => $('#mdt-xmit-form').requestSubmit());
   $('#incident-stream').addEventListener('scroll', (event) => {
     const element = event.currentTarget;
     state.following = element.scrollHeight - element.scrollTop - element.clientHeight < 60;
@@ -449,12 +572,16 @@ function updateXmitControls() {
   const account = state.authSession?.account;
   const canSubmit = state.authSession?.kind === 'user' && ['buff', 'news'].includes(account?.accountType);
   const enabled = Boolean(canSubmit && state.currentIncidentId && state.view === 'dispatch' && !state.xmitBusy);
-  $('#mdt-community-message').disabled = !enabled;
-  $('#mdt-community-message').placeholder = canSubmit
-    ? state.currentIncidentId && state.view === 'dispatch' ? 'TYPE COMMUNITY NOTE…' : 'OPEN DISPATCH INFO TO XMIT'
-    : 'LOGON TO XMIT A COMMUNITY NOTE';
+  const messageInput = $('#mdt-community-message');
+  const showComposer = canSubmit
+    ? Boolean(state.currentIncidentId && state.view === 'dispatch')
+    : state.xmitPrompted;
+  messageInput.hidden = !showComposer;
+  messageInput.disabled = !enabled;
+  $('.mdt-status').classList.toggle('composer-visible', showComposer);
+  messageInput.placeholder = canSubmit ? 'TYPE COMMUNITY NOTE…' : 'LOGON TO XMIT A COMMUNITY NOTE';
   $('#mdt-xmit').disabled = state.xmitBusy;
-  $('#mdt-logon').textContent = state.authSession ? 'LOGOFF' : 'LOGON';
+  $('#mdt-logon').textContent = 'LOGON';
   $('#mdt-logon').title = state.authSession?.account?.username ? `Signed in as @${state.authSession.account.username}` : 'Log in';
 }
 
@@ -492,6 +619,7 @@ async function submitMdtLogin(event) {
     if (!response.ok) throw new Error(result.error || 'Could not log in.');
     state.authRevision += 1;
     state.authSession = result.session;
+    state.xmitPrompted = false;
     closeLogonModal();
     updateXmitControls();
     const account = state.authSession?.account;
@@ -516,6 +644,7 @@ async function logoutFromMdt() {
   } finally {
     state.authRevision += 1;
     state.authSession = null;
+    state.xmitPrompted = false;
     updateXmitControls();
     showMdtFeedback('LOGGED OFF');
   }
@@ -526,7 +655,9 @@ async function submitCommunityNote(event) {
   const messageField = $('#mdt-community-message');
   const message = messageField.value.trim();
   if (!state.authSession) {
-    showMdtFeedback('LOGON REQUIRED · SELECT LOGON TO SIGN IN', true);
+    state.xmitPrompted = true;
+    updateXmitControls();
+    showMdtFeedback('LOGON REQUIRED · USE THE LOGON KEY');
     return;
   }
   if (state.authSession.kind !== 'user' || !['buff', 'news'].includes(state.authSession.account?.accountType)) {
@@ -538,8 +669,10 @@ async function submitCommunityNote(event) {
     return;
   }
   if (!message) {
-    showMdtFeedback('TYPE A COMMUNITY NOTE BEFORE XMIT', true);
-    messageField.focus();
+    state.xmitPrompted = true;
+    updateXmitControls();
+    showMdtFeedback('TYPE A COMMUNITY NOTE, THEN PRESS XMIT');
+    if (!messageField.disabled) messageField.focus();
     return;
   }
   const incidentId = state.currentIncidentId;
@@ -586,6 +719,7 @@ setInterval(updateLastIncidentAge, 1000);
 const startupDelayMs = 3000 + Math.floor(Math.random() * 2001);
 setTimeout(() => {
   state.started = true;
+  $('#mdt-connection').textContent = 'CONNECTING TO INCIDENT FEED…';
   connectEvents();
   void loadIncidents();
   state.refreshTimer = setInterval(() => { if (!state.hold && document.visibilityState === 'visible') void loadIncidents({ announce: true }); }, 30_000);
