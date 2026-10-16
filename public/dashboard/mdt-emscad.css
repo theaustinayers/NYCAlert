@@ -121,3 +121,15 @@ button.rail-control{width:100%;font-family:Arial,Helvetica,sans-serif;cursor:poi
 .mdt-login-feedback{min-height:20px;margin:10px 0 0!important;color:#ffe28b!important;font-size:13px!important}
 @media(max-width:760px){.mdt-workspace{grid-template-rows:minmax(0,1fr) 40px 50px}.mdt-status{font-size:10px}.mdt-status time{flex-basis:156px;padding-inline:4px}.status-xmit{flex-basis:58px;font-size:11px}.mdt-xmit-form{flex-basis:80px}.mdt-xmit-form input{padding:3px 5px;font-size:10px}.mdt-xmit-feedback{bottom:60px;left:8px;right:8px;max-width:none;font-size:11px}}
 @media(max-width:390px){.mdt-workspace{grid-template-rows:minmax(0,1fr) 36px 44px}.mdt-status{font-size:9px}.mdt-status time{flex-basis:140px;padding-inline:3px}.status-xmit{flex-basis:44px;padding:2px;font-size:10px}.mdt-xmit-form{flex-basis:50px}.mdt-xmit-form input{padding:2px 4px;font-size:9px}}
+
+/* Keep the status row fixed; show the note composer over its original black text area. */
+.mdt-status{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 76px 205px;grid-template-rows:minmax(0,1fr)}
+.mdt-status>span:first-child{grid-column:1;grid-row:1;display:flex!important;min-width:0}
+.mdt-xmit-form,.mdt-status.composer-visible .mdt-xmit-form{grid-column:1;grid-row:1;z-index:1;display:none;min-width:0;margin:0}
+.mdt-status.composer-visible .mdt-xmit-form{display:block}
+.status-xmit{grid-column:2;grid-row:1;min-width:0;flex:auto}
+.mdt-status time{grid-column:3;grid-row:1;min-width:0;flex:auto}
+.mdt-xmit-form input,.mdt-xmit-form input:disabled{background:#000;color:#fff;font:700 13px/1.2 'Courier New',Courier,monospace}
+.mdt-xmit-form input::placeholder{color:#fff;opacity:1}
+@media(max-width:760px){.mdt-status{grid-template-columns:minmax(0,1fr) 58px 156px}.mdt-status time{min-width:0}.status-xmit{min-width:0}}
+@media(max-width:390px){.mdt-status{grid-template-columns:minmax(0,1fr) 44px 140px}.mdt-status time{min-width:0}}
