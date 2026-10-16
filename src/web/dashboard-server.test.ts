@@ -24,6 +24,77 @@ async function availablePort(): Promise<number> {
 }
 
 describe('DashboardServer account routes', () => {
+  it('saves every incident editor field through the authenticated API and rejects invalid edits', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const store = new DashboardStore(false);
+    const accounts = new AccountStore(join(testDirectory, 'incident-editor-api'));
+    const server = new DashboardServer(store, port, '127.0.0.1', undefined, accounts, {
+      publicUrl: origin, trustProxy: false, adminEmail: 'editor@example.test', adminPassword: 'editor-test-password-long'
+    });
+    await server.start();
+    try {
+      const login = await fetch(`${origin}/api/auth/login`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'editor@example.test', password: 'editor-test-password-long' })
+      });
+      assert.equal(login.status, 200);
+      const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+      const headers = { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' };
+      const created = await fetch(`${origin}/api/admin/incidents`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ headline: 'Reported Fire', summary: 'Staff-created report.', location: '100 Example Street',
+          agency: 'FDNY', borough: 'Manhattan', category: 'breaking', incidentType: 'fire', callType: 'fire', newsworthinessScore: 3,
+          buffInterestScore: 2, assignmentDeskScore: 3 })
+      });
+      assert.equal(created.status, 201);
+      const initial = (await created.json() as { incident: { id: string; newsworthinessScore: number } }).incident;
+      assert.equal(initial.newsworthinessScore, 5, 'manual Breaking creation must not leave a 3/5 card');
+      const body = { headline: 'Conditions Under Control', summary: 'Staff corrected the current conditions.', location: '200 Example Avenue',
+        agency: 'NYPD', borough: 'Queens', category: 'newsworthy', incidentType: 'other', callType: '',
+        newsworthinessScore: 4, buffInterestScore: 4, assignmentDeskScore: 4 };
+      const edited = await fetch(`${origin}/api/admin/incidents/${initial.id}`, { method: 'PATCH', headers, body: JSON.stringify(body) });
+      assert.equal(edited.status, 200);
+      const canonical = store.getIncident(initial.id)!;
+      assert.equal(canonical.category, 'newsworthy');
+      assert.equal(canonical.newsworthinessScore, 4);
+      assert.equal(canonical.agency, 'NYPD');
+      assert.equal(canonical.borough, 'Queens');
+      assert.equal(canonical.callType, undefined);
+      assert.equal(canonical.summary, body.summary);
+      assert.equal(canonical.newsworthinessScore, 4);
+      assert.equal(canonical.buffInterestScore, 4);
+      assert.equal(canonical.assignmentDeskScore, 4);
+      const funnyBody = { ...body, category: 'funny', newsworthinessScore: 2, buffInterestScore: 5, assignmentDeskScore: 1 };
+      const funnyResponse = await fetch(`${origin}/api/admin/incidents/${initial.id}`, { method: 'PATCH', headers, body: JSON.stringify(funnyBody) });
+      assert.equal(funnyResponse.status, 200);
+      const funnyIncident = store.getIncident(initial.id)!;
+      assert.equal(funnyIncident.category, 'funny');
+      assert.equal(funnyIncident.newsworthinessScore, 2);
+      assert.equal(funnyIncident.buffInterestScore, 5);
+      assert.equal(funnyIncident.assignmentDeskScore, 1);
+      const unusualResponse = await fetch(`${origin}/api/admin/incidents/${initial.id}`, {
+        method: 'PATCH', headers, body: JSON.stringify({ ...body, category: 'weird_unique', newsworthinessScore: 3, buffInterestScore: 4, assignmentDeskScore: 2 })
+      });
+      assert.equal(unusualResponse.status, 200);
+      assert.equal(store.getIncident(initial.id)?.category, 'weird_unique');
+      assert.equal(store.getIncident(initial.id)?.newsworthinessScore, 3);
+      assert.equal(store.getIncident(initial.id)?.buffInterestScore, 4);
+      assert.equal(store.getIncident(initial.id)?.assignmentDeskScore, 2);
+      for (const invalid of [{ category: 'invalid' }, { agency: 'invalid' }, { borough: 'invalid' }, { headline: '' }, { headline: 'a'.repeat(121) }]) {
+        const response = await fetch(`${origin}/api/admin/incidents/${initial.id}`, {
+          method: 'PATCH', headers, body: JSON.stringify({ ...body, ...invalid })
+        });
+        assert.equal(response.status, 400);
+      }
+      const crossOrigin = await fetch(`${origin}/api/admin/incidents/${initial.id}`, {
+        method: 'PATCH', headers: { ...headers, Origin: 'https://untrusted.example' }, body: JSON.stringify(body)
+      });
+      assert.equal(crossOrigin.status, 403);
+      assert.equal(store.getIncident(initial.id)?.summary, body.summary);
+    } finally { await server.stop(); }
+  });
+
   it('serves a versioned paginated incident API for alternate dashboard templates', async () => {
     const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;

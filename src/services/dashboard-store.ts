@@ -564,23 +564,42 @@ export class DashboardStore {
     };
   }
 
-  async adminEditIncident(incidentId: string, input: { headline: string; summary: string; location?: string; callType?: CallType; incidentType?: IncidentType }): Promise<DashboardIncident | undefined> {
+  async adminEditIncident(incidentId: string, input: {
+    headline: string; summary: string; location?: string; callType?: CallType | null; incidentType?: IncidentType;
+    category?: AlertCategory; agency?: Agency; borough?: Borough | 'Citywide';
+    newsworthinessScore?: number; buffInterestScore?: number; assignmentDeskScore?: number;
+  }): Promise<DashboardIncident | undefined> {
     const index = this.incidents.findIndex((incident) => incident.id === incidentId);
     const current = this.getIncident(incidentId);
     if (!current) return undefined;
-    const headline = normalizeIncidentHeadline(input.headline, current.category);
+    if (!input.headline.trim() || !input.summary.trim()) throw new Error('Incident headline and summary are required.');
+    const category = input.category ?? current.category;
+    const agency = input.agency ?? current.agency;
+    const borough = input.borough ?? current.borough;
+    const headline = normalizeIncidentHeadline(input.headline.slice(0, 120), category);
     const summary = input.summary.trim().slice(0, 700);
     const location = input.location?.trim().slice(0, 180) || undefined;
     if (!headline || !summary) throw new Error('Incident headline and summary are required.');
-    const locationChanged = location !== current.location;
+    const locationChanged = location !== current.location || borough !== current.borough;
+    const newsworthinessScore = category === 'breaking' ? 5
+      : input.newsworthinessScore ?? (input.category !== undefined && current.category === 'breaking' && current.newsworthinessScore === 5 ? 4 : current.newsworthinessScore);
     const updated: DashboardIncident = {
       ...current,
-      title: formatIncidentTitle(headline, location, current.agency, current.borough, current.category),
+      title: formatIncidentTitle(headline, location, agency, borough, category),
+      agency,
+      agencies: [...new Set([agency, ...current.agencies.filter((item) => item !== current.agency)])],
+      borough,
+      category,
+      newsworthinessScore,
       summary,
       updatedAt: new Date().toISOString(),
       ...(location ? { location } : { location: undefined }),
-      ...(input.callType ? { callType: input.callType } : {}),
+      ...(input.callType !== undefined ? { callType: input.callType ?? undefined }
+        : input.incidentType !== undefined || input.agency !== undefined
+          ? { callType: deriveCallType(agency, input.incidentType ?? current.incidentType) } : {}),
       ...(input.incidentType ? { incidentType: input.incidentType } : {}),
+      buffInterestScore: input.buffInterestScore ?? current.buffInterestScore,
+      assignmentDeskScore: input.assignmentDeskScore ?? current.assignmentDeskScore,
       ...(locationChanged ? { latitude: undefined, longitude: undefined, locationPrecision: 'unresolved' } : {})
     };
     if (this.incidentDatabase) this.incidentDatabase.upsert(updated);

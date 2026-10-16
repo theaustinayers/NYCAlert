@@ -21,6 +21,64 @@ const input = {
 };
 
 describe('DashboardStore', () => {
+  it('persists staff category, priority, source and condition edits across database restarts', async () => {
+    const directory = join(testDirectory, 'staff-edit-persistence');
+    const store = new DashboardStore(false, 300, false, 100, new IncidentDatabase(directory));
+    await store.init();
+    const incident = await store.publish({ ...input, headline: 'Smoke Reported', location: '100 Example Street',
+      latitude: 40.72, longitude: -73.81, locationPrecision: 'street_address', callType: 'fire', incidentType: 'fire' });
+    let notifications = 0;
+    const unsubscribe = store.onIncidentChange(() => { notifications += 1; });
+    const edited = await store.adminEditIncident(incident.id, {
+      headline: 'Working Fire', summary: 'Staff reports working fire conditions.', location: incident.location,
+      category: 'breaking', agency: 'NYPD', borough: 'Queens', incidentType: 'other', callType: null
+    });
+    assert.equal(edited?.category, 'breaking');
+    assert.equal(edited?.newsworthinessScore, 5);
+    assert.equal(edited?.callType, undefined);
+    assert.equal(edited?.latitude, undefined, 'changing borough must invalidate the old map pin');
+    assert.deepEqual(edited?.agencies, ['NYPD']);
+    assert.equal(notifications, 1);
+    unsubscribe();
+    store.close();
+
+    const reopened = new DashboardStore(false, 300, false, 100, new IncidentDatabase(directory));
+    await reopened.init();
+    try {
+      const restored = reopened.getIncident(incident.id)!;
+      assert.equal(restored.category, 'breaking');
+      assert.equal(restored.newsworthinessScore, 5);
+      assert.equal(restored.agency, 'NYPD');
+      assert.equal(restored.borough, 'Queens');
+      assert.equal(restored.callType, undefined);
+      assert.equal(reopened.search('working', ['Queens']).length, 1);
+      const downgraded = await reopened.adminEditIncident(incident.id, {
+        headline: 'Conditions Under Control', summary: 'Staff reports conditions under control.', location: restored.location,
+        category: 'newsworthy'
+      });
+      assert.equal(downgraded?.category, 'newsworthy');
+      assert.equal(downgraded?.newsworthinessScore, 4);
+      const funny = await reopened.adminEditIncident(incident.id, {
+        headline: 'Unusual Radio Detail', summary: 'Staff classified this as a funny radio event.', location: restored.location,
+        category: 'funny', newsworthinessScore: 2, buffInterestScore: 4, assignmentDeskScore: 1
+      });
+      assert.equal(funny?.category, 'funny');
+      assert.equal(funny?.newsworthinessScore, 2);
+      assert.equal(funny?.buffInterestScore, 4);
+      assert.equal(funny?.assignmentDeskScore, 1);
+      const unusual = await reopened.adminEditIncident(incident.id, {
+        headline: 'Unusual Incident', summary: 'Staff classified this as unusual.', location: restored.location,
+        category: 'weird_unique', newsworthinessScore: 3, buffInterestScore: 4, assignmentDeskScore: 2
+      });
+      assert.equal(unusual?.category, 'weird_unique');
+      assert.equal(unusual?.newsworthinessScore, 3);
+      assert.equal(unusual?.buffInterestScore, 4);
+      assert.equal(unusual?.assignmentDeskScore, 2);
+      await assert.rejects(reopened.adminEditIncident(incident.id, { headline: ' ', summary: 'Valid summary' }), /required/);
+      assert.equal(reopened.getIncident(incident.id)?.summary, 'Staff classified this as unusual.');
+    } finally { reopened.close(); }
+  });
+
   it('persists published incidents and update history for another site view across restarts', async () => {
     const directory = join(testDirectory, 'durable-incidents');
     const database = new IncidentDatabase(directory);

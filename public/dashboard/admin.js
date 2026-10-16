@@ -50,7 +50,12 @@ async function init() {
   $('#test-x-integration').addEventListener('click', testXIntegration);
   $('#create-incident').addEventListener('click', () => openIncidentEditor());
   $('#incident-form').addEventListener('submit', saveIncident);
-  $('#incident-form').addEventListener('click', (event) => { if (event.target.value === 'cancel') $('#incident-editor').close(); });
+  $('#incident-form').addEventListener('click', (event) => {
+    if (event.target.closest('button')?.value === 'cancel') {
+      event.preventDefault();
+      $('#incident-editor').close();
+    }
+  });
   const sessionResponse = await api('/api/auth/session').catch(() => ({ session: null }));
   state.session = sessionResponse.session;
   if (state.session?.kind !== 'admin') {
@@ -58,6 +63,7 @@ async function init() {
     return;
   }
   state.isAdmin = ['owner', 'admin'].includes(state.session.role || state.session.account?.adminRole);
+  $('#create-incident').hidden = !canEditIncidents();
   document.querySelectorAll('[data-admin-only]').forEach((element) => { element.hidden = !state.isAdmin; });
   $('#admin-session-label').textContent = state.session.account?.email || 'Administrator session';
   activateSection('users');
@@ -303,7 +309,7 @@ async function loadUsers() {
     const data = await api(`/api/admin/accounts${params.size ? `?${params}` : ''}`);
     state.users = data.accounts || [];
     renderUsers();
-    await Promise.all([loadAdministrators(), populateWebhookAccounts()]);
+    if (state.isAdmin) await Promise.all([loadAdministrators(), populateWebhookAccounts()]);
     $('#pending-user-count').textContent = state.users.filter((user) => user.status === 'pending-approval' || user.status === 'pending-verification').length;
   } catch (error) { $('#users-table').innerHTML = `<tr><td colspan="6">${escapeHtml(error.message)}</td></tr>`; }
 }
@@ -404,6 +410,10 @@ async function loadIncidents() {
   } catch (error) { showMessage(error.message, true); }
 }
 
+function canEditIncidents() {
+  return state.isAdmin || state.session?.role === 'moderator';
+}
+
 function renderIncidents() {
   const query = $('#incident-search').value.trim().toLowerCase();
   const incidents = state.incidents.filter((incident) => !query || `${incident.title} ${incident.summary} ${incident.location || ''} ${incident.agency} ${incident.borough}`.toLowerCase().includes(query));
@@ -415,9 +425,13 @@ function renderIncidents() {
   pendingList.innerHTML = state.pending.length ? state.pending.map((pending) => `<article class="admin-card"><div class="admin-card-meta"><span class="admin-badge pending-approval">PRIVATE · PENDING</span><span>${escapeHtml(pending.agency)} · ${escapeHtml(pending.borough)}</span><span>Expires ${escapeHtml(formatTime(pending.expiresAt))}</span></div><h3>${escapeHtml(pending.eventType || 'Unlocated report')}</h3><p>${escapeHtml(pending.summary)}</p>${pending.location ? `<p>Unverified location: ${escapeHtml(pending.location)}</p>` : '<p>No confidently geocoded address. Not shown publicly.</p>'}<div class="admin-card-actions"><button class="admin-icon-button approve" data-allow-pending="${escapeHtml(pending.id)}">Allow Pending</button><button class="admin-icon-button danger" data-discard-pending="${escapeHtml(pending.id)}">Discard pending</button></div></article>`).join('') : '<p class="admin-muted">No pending reports. Queue contents expire and are lost on service restart.</p>';
   $$('[data-allow-pending]').forEach((button) => button.addEventListener('click', () => allowPending(button.dataset.allowPending)));
   $$('[data-discard-pending]').forEach((button) => button.addEventListener('click', () => discardPending(button.dataset.discardPending)));
+  if (!canEditIncidents()) {
+    $$('[data-edit-incident], [data-delete-incident], [data-allow-pending], [data-discard-pending]').forEach((button) => { button.hidden = true; });
+  }
 }
 
 function openIncidentEditor(incident) {
+  if (!canEditIncidents()) return;
   const form = $('#incident-form');
   form.reset();
   form.elements.id.value = incident?.id || '';
@@ -429,13 +443,20 @@ function openIncidentEditor(incident) {
   form.elements.callType.value = incident?.callType || '';
   form.elements.incidentType.value = incident?.incidentType || 'other';
   form.elements.category.value = incident?.category || 'newsworthy';
+  form.elements.newsworthinessScore.value = incident?.newsworthinessScore ?? 3;
+  form.elements.buffInterestScore.value = incident?.buffInterestScore ?? 3;
+  form.elements.assignmentDeskScore.value = incident?.assignmentDeskScore ?? 3;
   $('#incident-editor-title').textContent = incident ? 'Edit incident' : 'Add incident';
   $('#incident-editor').showModal();
 }
 
 async function saveIncident(event) {
   event.preventDefault();
+  if (!canEditIncidents()) return;
   const form = event.currentTarget;
+  const submit = $('#save-incident');
+  if (submit.disabled) return;
+  submit.disabled = true;
   const data = Object.fromEntries(new FormData(form));
   const id = data.id;
   delete data.id;
@@ -446,6 +467,7 @@ async function saveIncident(event) {
     showMessage(id ? 'Incident updated.' : 'Incident added to the public board.');
     await loadIncidents();
   } catch (error) { showMessage(error.message, true); }
+  finally { submit.disabled = false; }
 }
 
 async function deleteIncident(id) {

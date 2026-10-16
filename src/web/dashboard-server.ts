@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { EmailMessage } from '../providers/php-mail.js';
 import { isAgency, isBorough, type Agency, type Borough } from '../domain/subscriptions.js';
 import { isCallType } from '../domain/call-type.js';
+import { alertCategories, type AlertCategory } from '../domain/triage.js';
 import { dashboardFeedLinks } from '../providers/broadcastify-catalog.js';
 import type { DashboardStore } from '../services/dashboard-store.js';
 import type { AccountStore, AccountStatus, AccountWebhook, AudienceAccountType } from '../storage/account-store.js';
@@ -948,7 +949,10 @@ export class DashboardServer {
             json(response, 400, { error: 'Choose a valid incident type.' }); return true;
           }
           if (callType !== undefined && callType !== '' && !isCallType(callType)) { json(response, 400, { error: 'Choose Fire, EMS, or PD.' }); return true; }
-          const score = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.min(5, Math.round(value))) : 3;
+          const score = (value: unknown): number => {
+            const parsed = value === undefined || value === '' ? 3 : Number(value);
+            return Number.isFinite(parsed) ? Math.max(1, Math.min(5, Math.round(parsed))) : 3;
+          };
           const confidence = typeof body.confidence === 'number' && Number.isFinite(body.confidence) ? Math.max(0, Math.min(1, body.confidence)) : 0.9;
           const incident = await this.store.publish({
             title: headline, headline, summary, occurredAt: new Date(), agency, borough,
@@ -957,7 +961,7 @@ export class DashboardServer {
             ...(location ? { location } : {}),
             ...(typeof incidentType === 'string' ? { incidentType: incidentType as 'medical' | 'vehicle' | 'fire' | 'police' | 'other' } : {}),
             confidence,
-            newsworthinessScore: score(body.newsworthinessScore),
+            newsworthinessScore: category === 'breaking' ? 5 : score(body.newsworthinessScore),
             buffInterestScore: score(body.buffInterestScore),
             assignmentDeskScore: score(body.assignmentDeskScore)
           });
@@ -983,9 +987,37 @@ export class DashboardServer {
             const location = typeof body.location === 'string' ? body.location.trim() : '';
             const callType = body.callType;
             const incidentType = body.incidentType;
+            const category = body.category;
+            const agency = body.agency;
+            const borough = body.borough;
+            const parseAudienceScore = (value: unknown, name: string): number | undefined => {
+              if (value === undefined || value === '') return undefined;
+              if (typeof value !== 'number' && typeof value !== 'string') throw new Error(`Choose a valid ${name} score from 1 to 5.`);
+              const parsed = Number(value);
+              if (!Number.isInteger(parsed) || parsed < 1 || parsed > 5) throw new Error(`Choose a valid ${name} score from 1 to 5.`);
+              return parsed;
+            };
+            if (!headline || !summary) { json(response, 400, { error: 'Headline and summary are required.' }); return true; }
+            if (headline.length > 120 || summary.length > 700 || location.length > 180) { json(response, 400, { error: 'Headline, summary, or location exceeds its maximum length.' }); return true; }
+            if (category !== undefined && !alertCategories.includes(category as AlertCategory)) { json(response, 400, { error: 'Choose a valid incident category.' }); return true; }
+            if (agency !== undefined && (typeof agency !== 'string' || !isAgency(agency))) { json(response, 400, { error: 'Choose a valid agency.' }); return true; }
+            if (borough !== undefined && (typeof borough !== 'string' || !(isBorough(borough) || borough === 'Citywide'))) { json(response, 400, { error: 'Choose a valid borough.' }); return true; }
             if (callType !== undefined && callType !== '' && !isCallType(callType)) { json(response, 400, { error: 'Choose Fire, EMS, or PD.' }); return true; }
             if (incidentType !== undefined && !['medical', 'vehicle', 'fire', 'police', 'other'].includes(String(incidentType))) { json(response, 400, { error: 'Choose a valid detailed incident type.' }); return true; }
-            const incident = await this.store.adminEditIncident(incidentMatch[1]!, { headline, summary, location, ...(isCallType(callType) ? { callType } : {}), ...(typeof incidentType === 'string' ? { incidentType: incidentType as 'medical' | 'vehicle' | 'fire' | 'police' | 'other' } : {}) });
+            const newsworthinessScore = parseAudienceScore(body.newsworthinessScore, 'Public');
+            const buffInterestScore = parseAudienceScore(body.buffInterestScore, 'Buff');
+            const assignmentDeskScore = parseAudienceScore(body.assignmentDeskScore, 'News Media');
+            const incident = await this.store.adminEditIncident(incidentMatch[1]!, {
+              headline, summary, location,
+              ...(category !== undefined ? { category: category as AlertCategory } : {}),
+              ...(typeof agency === 'string' ? { agency: agency as Agency } : {}),
+              ...(typeof borough === 'string' ? { borough: borough as Borough | 'Citywide' } : {}),
+              ...(callType === '' ? { callType: null } : isCallType(callType) ? { callType } : {}),
+              ...(typeof incidentType === 'string' ? { incidentType: incidentType as 'medical' | 'vehicle' | 'fire' | 'police' | 'other' } : {}),
+              ...(newsworthinessScore !== undefined ? { newsworthinessScore } : {}),
+              ...(buffInterestScore !== undefined ? { buffInterestScore } : {}),
+              ...(assignmentDeskScore !== undefined ? { assignmentDeskScore } : {})
+            });
             if (incident) logger.info({ action: 'admin-incident-edited', actorId: adminSession.account?.id ?? 'bootstrap-admin', incidentId: incident.id }, 'Admin incident edited');
             json(response, incident ? 200 : 404, incident ? { incident } : { error: 'Incident not found.' });
           } catch (error) { json(response, 400, { error: error instanceof Error ? error.message : 'Could not edit incident.' }); }
