@@ -928,11 +928,15 @@ async function refresh() {
     renderIncidents();
     renderLiveCalls();
     renderDiagnostics();
-    $('#system-state').textContent = 'ONLINE';
-    $('#feed-status').textContent = state.feeds.some((feed) => feed.state === 'online') ? 'MONITORING' : 'NO LIVE FEEDS';
+    const systemState = $('#system-state');
+    if (systemState) systemState.textContent = 'ONLINE';
+    const feedStatus = $('#feed-status');
+    if (feedStatus) feedStatus.textContent = state.feeds.some((feed) => feed.state === 'online') ? 'MONITORING' : 'NO LIVE FEEDS';
   } catch {
-    $('#system-state').textContent = 'OFFLINE';
-    $('#feed-status').textContent = 'RETRYING';
+    const systemState = $('#system-state');
+    if (systemState) systemState.textContent = 'OFFLINE';
+    const feedStatus = $('#feed-status');
+    if (feedStatus) feedStatus.textContent = 'RETRYING';
   }
 }
 
