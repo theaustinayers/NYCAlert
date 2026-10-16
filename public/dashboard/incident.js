@@ -90,14 +90,24 @@ function renderUnits(units) {
     : 'Not identified in radio traffic';
 }
 
-function renderCommunityNotes(notes) {
+function renderCommunityNotes(notes, canDelete = false) {
   const items = Array.isArray(notes) ? notes : [];
   if (!items.length) return;
   const section = document.createElement('section');
   section.className = 'incident-community-notes';
   section.setAttribute('aria-label', 'Unverified community notes');
-  section.innerHTML = `<h2>Community notes <span>UNVERIFIED</span></h2><ol>${items.map((note) => `<li><div><time>${escapeHtml(formatTime(note.createdAt))}</time><strong>@${escapeHtml(note.username)}</strong></div><p>${escapeHtml(note.message)}</p><span class="community-note-role ${note.role ? `staff-${escapeHtml(note.role)}` : note.audience === 'buff' ? 'buff' : 'news'}">${note.role ? note.role === 'owner' ? 'ADMIN' : escapeHtml(note.role.toUpperCase()) : note.audience === 'buff' ? 'BUFF' : 'NEWS MEDIA'}</span></li>`).join('')}</ol>`;
+  section.innerHTML = `<h2>Community notes <span>UNVERIFIED</span></h2><ol>${items.map((note) => `<li><div><time>${escapeHtml(formatTime(note.createdAt))}</time><strong>@${escapeHtml(note.username)}</strong></div><p>${escapeHtml(note.message)}</p><span class="community-note-role ${note.role ? `staff-${escapeHtml(note.role)}` : note.audience === 'buff' ? 'buff' : 'news'}">${note.role ? note.role === 'owner' ? 'ADMIN' : escapeHtml(note.role.toUpperCase()) : note.audience === 'buff' ? 'BUFF' : 'NEWS MEDIA'}</span>${canDelete ? `<button type="button" class="community-note-delete" data-community-note-delete="${escapeHtml(note.id)}" aria-label="Delete community update by @${escapeHtml(note.username)}">Delete update</button>` : ''}</li>`).join('')}</ol>`;
   root.append(section);
+}
+
+async function deleteCommunityNote(noteId) {
+  if (!confirm('Delete this community update from the incident?')) return;
+  const response = await fetch(`/api/account/incidents/${encodeURIComponent(incidentId)}/community-notes/${encodeURIComponent(noteId)}`, {
+    method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'Could not delete community update.');
+  await loadIncident();
 }
 
 function renderMap(incident) {
@@ -123,7 +133,7 @@ function renderMap(incident) {
   setTimeout(() => map.invalidateSize(), 0);
 }
 
-function render(incident) {
+function render(incident, canDeleteCommunityNotes = false) {
   const updates = Array.isArray(incident.updates) ? incident.updates : [];
   const units = Array.isArray(incident.unitIds) ? incident.unitIds : [];
   const unitAssignments = Array.isArray(incident.unitAssignments) ? incident.unitAssignments : [];
@@ -155,7 +165,7 @@ function render(incident) {
       <section class="incident-audio-section" aria-label="Incident audio"><span class="incident-detail-section-label">RADIO AUDIO</span>${incident.hasAudio ? `<audio class="incident-audio-player" controls preload="none" src="/api/incidents/${encodeURIComponent(incident.id)}/audio">Audio playback is not supported.</audio>` : '<div class="incident-audio-unavailable">Audio playback is not available for this incident.</div>'}</section>
       <div class="incident-detail-share" aria-label="Share incident"><span class="incident-detail-section-label">SHARE</span><button class="incident-share-button" type="button" data-share-service="facebook" aria-label="Share incident on Facebook" title="Facebook">f</button><button class="incident-share-button" type="button" data-share-service="x" aria-label="Share incident on X" title="X">𝕏</button><button class="incident-share-button" type="button" id="copy-incident-link" aria-label="Copy incident URL" title="Copy URL"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6.5" y="6.5" width="9" height="11" rx="1.5"></rect><path d="M13.5 6V4.5A1.5 1.5 0 0 0 12 3H5.5A1.5 1.5 0 0 0 4 4.5v9A1.5 1.5 0 0 0 5.5 15H6"></path></svg></button><span class="incident-copy-feedback" id="copy-feedback" role="status" aria-live="polite"></span></div>
     </article>`;
-  renderCommunityNotes(incident.communityNotes);
+  renderCommunityNotes(incident.communityNotes, canDeleteCommunityNotes);
   document.title = `${headline} — NYC Alert`;
   document.querySelector('meta[name="description"]')?.setAttribute('content', `${incident.summary} ${headline}`.slice(0, 250));
   document.querySelector('meta[property="og:title"]')?.setAttribute('content', headline);
@@ -186,6 +196,18 @@ function render(incident) {
   });
 }
 
+root.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-community-note-delete]');
+  if (!button || button.disabled) return;
+  event.preventDefault();
+  event.stopPropagation();
+  button.disabled = true;
+  void deleteCommunityNote(button.dataset.communityNoteDelete).catch((error) => {
+    button.disabled = false;
+    window.alert(error instanceof Error ? error.message : 'Could not delete community update.');
+  });
+});
+
 async function loadIncident() {
   formatClock();
   if (!/^[0-9a-f-]{36}$/i.test(incidentId)) {
@@ -197,7 +219,9 @@ async function loadIncident() {
     if (!response.ok) throw new Error('Incident not found');
     const data = await response.json();
     if (!data.incident) throw new Error('Incident not found');
-    render(data.incident);
+    const sessionResponse = await fetch('/api/auth/session', { credentials: 'same-origin', cache: 'no-store' }).catch(() => undefined);
+    const session = sessionResponse?.ok ? (await sessionResponse.json()).session : undefined;
+    render(data.incident, session?.kind === 'admin');
   } catch {
     root.innerHTML = '<div class="incident-not-found"><h1>Incident unavailable</h1><p>This incident may have expired or the alert service may have restarted. Return to the public desk for current incidents.</p></div>';
   }

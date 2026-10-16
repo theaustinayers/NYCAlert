@@ -238,7 +238,7 @@ function buildEntries() {
     }
     for (const note of incident.communityNotes || []) {
       entries.push({
-        id: `${incident.id}:community:${note.id}`, incidentId: incident.id, kind: 'community', at: note.createdAt,
+        id: `${incident.id}:community:${note.id}`, noteId: note.id, incidentId: incident.id, kind: 'community', at: note.createdAt,
         incident, agency: incident.agency, borough: incident.borough, author: note.username,
         audience: note.audience, role: note.role, title: 'COMMUNITY NOTE · UNVERIFIED', summary: note.message,
         location: '', units: [], boxes: []
@@ -350,8 +350,11 @@ function render() {
     ].filter(Boolean).join('');
     if (entry.kind === 'community') {
       const audienceLabel = communityNoteRoleLabel(entry);
+      const deleteButton = state.authSession?.kind === 'admin'
+        ? `<button type="button" class="mdt-community-note-delete" data-community-note-delete="${escapeHtml(entry.noteId)}" data-incident-id="${escapeHtml(entry.incidentId)}">DELETE</button>`
+        : '';
       markup.push(`<article class="incident-entry entry-community-note" data-entry-id="${escapeHtml(entry.id)}">
-        <div class="entry-topline"><time class="entry-time">${escapeHtml(formatStamp(entry.at))}</time><strong class="community-note-author">@${escapeHtml(entry.author)}</strong><span class="community-note-warning">COMMUNITY · UNVERIFIED</span></div>
+        <div class="entry-topline"><time class="entry-time">${escapeHtml(formatStamp(entry.at))}</time><strong class="community-note-author">@${escapeHtml(entry.author)}</strong><span class="community-note-warning">COMMUNITY · UNVERIFIED</span>${deleteButton}</div>
         <p class="entry-summary">${escapeHtml(entry.summary)} <span class="community-note-role ${communityNoteRoleClass(entry)}">${escapeHtml(audienceLabel)}</span></p></article>`);
       continue;
     }
@@ -488,6 +491,29 @@ function wireControls() {
   });
   $('#mdt-login-form').addEventListener('submit', submitMdtLogin);
   $('#mdt-xmit-form').addEventListener('submit', submitCommunityNote);
+  $('#console-output').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-community-note-delete]');
+    if (!button || state.authSession?.kind !== 'admin') return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!confirm('Delete this community update from the incident?')) return;
+    button.disabled = true;
+    const incidentId = button.dataset.incidentId;
+    const noteId = button.dataset.communityNoteDelete;
+    void fetch(`/api/account/incidents/${encodeURIComponent(incidentId)}/community-notes/${encodeURIComponent(noteId)}`, {
+      method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    }).then(async (response) => {
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not delete community update.');
+      const incident = state.incidents.find((item) => item.id === incidentId);
+      if (incident) incident.communityNotes = (incident.communityNotes || []).filter((note) => note.id !== noteId);
+      render();
+      showMdtFeedback('COMMUNITY UPDATE DELETED');
+    }).catch((error) => {
+      button.disabled = false;
+      showMdtFeedback(error instanceof Error ? error.message : 'Could not delete community update.', true);
+    });
+  });
   $$('[data-view]').forEach((button) => button.addEventListener('click', () => {
     state.view = button.dataset.view;
     $$('[data-view]').forEach((item) => {
@@ -580,7 +606,7 @@ async function loadMdtSession() {
 function updateXmitControls() {
   const account = state.authSession?.account;
   const canSubmit = state.authSession?.kind === 'admin'
-    || (state.authSession?.kind === 'user' && ['buff', 'news'].includes(account?.accountType));
+    || (state.authSession?.kind === 'user' && ['buff', 'news'].includes(account?.accountType) && !account?.communityUpdatesSuspended);
   const enabled = Boolean(canSubmit && state.currentIncidentId && state.view === 'dispatch' && !state.xmitBusy);
   const messageInput = $('#mdt-community-message');
   const showComposer = state.xmitPrompted
@@ -683,6 +709,12 @@ async function submitCommunityNote(event) {
   }
   if (state.authSession.kind === 'user' && !['buff', 'news'].includes(state.authSession.account?.accountType)) {
     showMdtFeedback('XMIT IS AVAILABLE TO BUFF, NEWS MEDIA, AND STAFF ACCOUNTS', true);
+    return;
+  }
+  if (state.authSession.kind === 'user' && state.authSession.account?.communityUpdatesSuspended) {
+    state.xmitPrompted = false;
+    updateXmitControls();
+    showMdtFeedback('COMMUNITY UPDATES ARE SUSPENDED FOR THIS ACCOUNT', true);
     return;
   }
   if (!state.currentIncidentId || state.view !== 'dispatch') {

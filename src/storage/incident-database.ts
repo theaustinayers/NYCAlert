@@ -213,6 +213,10 @@ export class IncidentDatabase {
       VALUES (?, ?, ?, ?, ?, ?, ?)`).run(note.id, incidentId, note.username, note.audience ?? 'news', note.role ?? null, note.message, note.createdAt);
   }
 
+  deleteCommunityNote(incidentId: string, noteId: string): boolean {
+    return this.getDatabase().prepare('DELETE FROM incident_community_notes WHERE incident_id = ? AND id = ?').run(incidentId, noteId).changes > 0;
+  }
+
   list(query = '', boroughs?: readonly Borough[], limit = 100_000, offset = 0, callType?: CallType): DashboardIncident[] {
     const db = this.getDatabase();
     const clauses: string[] = [];

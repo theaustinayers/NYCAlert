@@ -39,6 +39,7 @@ export interface AccountRecord {
   status: AccountStatus;
   emailVerifiedAt?: string;
   webhookAccessSuspended?: boolean;
+  communityUpdatesSuspended?: boolean;
   createdAt: string;
   passwordSalt: string;
   passwordHash: string;
@@ -47,7 +48,7 @@ export interface AccountRecord {
   webhooks: AccountWebhook[];
   dashboardPreferences?: DashboardPreferences;
 }
-export interface PublicAccount { id: string; username: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: AccountRoleName; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhookSummary[]; webhookAccessSuspended: boolean; dashboardPreferences?: DashboardPreferences; }
+export interface PublicAccount { id: string; username: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: AccountRoleName; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhookSummary[]; webhookAccessSuspended: boolean; communityUpdatesSuspended: boolean; dashboardPreferences?: DashboardPreferences; }
 export interface AdminAccount extends PublicAccount { firstName: string; lastName: string; phone: string; usageCase: string; }
 
 const passwordBytes = 64;
@@ -334,6 +335,14 @@ export class AccountStore {
     return this.publicView(account);
   }
 
+  async setCommunityUpdatesSuspended(accountId: string, suspended: boolean): Promise<PublicAccount | undefined> {
+    const account = this.accounts.find((item) => item.id === accountId && !item.isAdmin);
+    if (!account) return undefined;
+    account.communityUpdatesSuspended = suspended;
+    await this.persist();
+    return this.publicView(account);
+  }
+
   listWebhookTargets(borough: Borough | 'Citywide', audience: WebhookAudience): WebhookTarget[] {
     return this.accounts.filter((account) => account.status === 'approved' && account.emailVerifiedAt && !account.webhookAccessSuspended && account.accountType === audience)
       .flatMap((account) => account.webhooks
@@ -354,7 +363,7 @@ export class AccountStore {
       const platform = webhook.platform ?? inferWebhookPlatform(webhook.url);
       return { id: webhook.id, name: webhook.name, ...(platform ? { platform } : {}), boroughs: webhook.boroughs, ...(webhook.suspendedAt ? { suspendedAt: webhook.suspendedAt } : {}) };
     });
-    return { id, username, email, accountType, isAdmin: Boolean(isAdmin), ...(isAdmin ? { adminRole: adminRole ?? 'admin' } : {}), status, emailVerified: Boolean(emailVerifiedAt), createdAt, webhookAccessSuspended: Boolean(account.webhookAccessSuspended), webhooks: webhookSummaries, ...(account.dashboardPreferences ? { dashboardPreferences: { ...account.dashboardPreferences, boroughs: [...account.dashboardPreferences.boroughs], liveCategories: [...account.dashboardPreferences.liveCategories] } } : {}) };
+    return { id, username, email, accountType, isAdmin: Boolean(isAdmin), ...(isAdmin ? { adminRole: adminRole ?? 'admin' } : {}), status, emailVerified: Boolean(emailVerifiedAt), createdAt, webhookAccessSuspended: Boolean(account.webhookAccessSuspended), communityUpdatesSuspended: Boolean(account.communityUpdatesSuspended), webhooks: webhookSummaries, ...(account.dashboardPreferences ? { dashboardPreferences: { ...account.dashboardPreferences, boroughs: [...account.dashboardPreferences.boroughs], liveCategories: [...account.dashboardPreferences.liveCategories] } } : {}) };
   }
 
   private requireAvailableUsername(value: string, exceptAccountId?: string): string {

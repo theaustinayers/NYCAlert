@@ -314,9 +314,10 @@ function renderUsers() {
   const users = state.users.filter((user) => (!query || `${user.username} ${user.firstName} ${user.lastName} ${user.email} ${user.accountType}`.toLowerCase().includes(query)) && (status === 'all' || user.status === status));
   const table = $('#users-table');
   if (!users.length) { table.innerHTML = '<tr><td colspan="6">No users match these filters.</td></tr>'; return; }
-  table.innerHTML = users.map((user) => `<tr data-user-id="${escapeHtml(user.id)}"><td><div class="admin-user-cell"><strong>@${escapeHtml(user.username)}</strong><small>Private account name: ${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)}</small><small>${escapeHtml(user.email)}</small><small>${escapeHtml(user.phone || '')}</small></div></td><td><span class="admin-badge">${escapeHtml(user.accountType)}</span><small>${user.usageCase ? `<br>${escapeHtml(user.usageCase)}` : ''}</small></td><td><span class="admin-badge ${escapeHtml(user.status)}">${escapeHtml(user.status)}</span>${user.webhookAccessSuspended ? '<small><br>Webhook access suspended</small>' : ''}</td><td>${user.emailVerified ? 'Verified' : 'No'}</td><td>${escapeHtml(formatTime(user.createdAt))}</td><td><div class="admin-row-actions">${user.emailVerified && user.status !== 'approved' ? '<button class="approve" data-user-action="approved">Approve</button>' : ''}${user.status !== 'suspended' ? '<button data-user-action="suspended">Suspend</button>' : '<button data-user-action="pending-approval">Restore</button>'}<button data-webhook-access="${user.webhookAccessSuspended ? 'false' : 'true'}">${user.webhookAccessSuspended ? 'Restore hooks' : 'Suspend hooks'}</button><button class="danger" data-user-delete="true">Delete</button></div></td></tr>`).join('');
+  table.innerHTML = users.map((user) => `<tr data-user-id="${escapeHtml(user.id)}"><td><div class="admin-user-cell"><strong>@${escapeHtml(user.username)}</strong><small>Private account name: ${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)}</small><small>${escapeHtml(user.email)}</small><small>${escapeHtml(user.phone || '')}</small></div></td><td><span class="admin-badge">${escapeHtml(user.accountType)}</span><small>${user.usageCase ? `<br>${escapeHtml(user.usageCase)}` : ''}</small></td><td><span class="admin-badge ${escapeHtml(user.status)}">${escapeHtml(user.status)}</span>${user.webhookAccessSuspended ? '<small><br>Webhook access suspended</small>' : ''}${user.communityUpdatesSuspended ? '<small><br>Community updates suspended</small>' : ''}</td><td>${user.emailVerified ? 'Verified' : 'No'}</td><td>${escapeHtml(formatTime(user.createdAt))}</td><td><div class="admin-row-actions">${user.emailVerified && user.status !== 'approved' ? '<button class="approve" data-user-action="approved">Approve</button>' : ''}${user.status !== 'suspended' ? '<button data-user-action="suspended">Suspend</button>' : '<button data-user-action="pending-approval">Restore</button>'}<button data-webhook-access="${user.webhookAccessSuspended ? 'false' : 'true'}">${user.webhookAccessSuspended ? 'Restore hooks' : 'Suspend hooks'}</button><button data-community-updates="${user.communityUpdatesSuspended ? 'false' : 'true'}">${user.communityUpdatesSuspended ? 'Restore comments' : 'Suspend comments'}</button><button class="danger" data-user-delete="true">Delete</button></div></td></tr>`).join('');
   $$('[data-user-action]', table).forEach((button) => button.addEventListener('click', () => updateUser(button.closest('[data-user-id]').dataset.userId, button.dataset.userAction)));
   $$('[data-webhook-access]', table).forEach((button) => button.addEventListener('click', () => updateWebhookAccess(button.closest('[data-user-id]').dataset.userId, button.dataset.webhookAccess === 'true')));
+  $$('[data-community-updates]', table).forEach((button) => button.addEventListener('click', () => updateCommunityUpdates(button.closest('[data-user-id]').dataset.userId, button.dataset.communityUpdates === 'true')));
   $$('[data-user-delete]', table).forEach((button) => button.addEventListener('click', () => deleteUser(button.closest('[data-user-id]').dataset.userId)));
 }
 
@@ -336,6 +337,16 @@ async function updateWebhookAccess(id, suspended) {
     showMessage(`Webhook access ${suspended ? 'suspended' : 'restored'}.`);
     await loadUsers();
     await loadWebhooks();
+  } catch (error) { showMessage(error.message, true); }
+}
+
+async function updateCommunityUpdates(id, suspended) {
+  const verb = suspended ? 'suspend' : 'restore';
+  if (!confirm(`${verb[0].toUpperCase()}${verb.slice(1)} this account's ability to add community updates?`)) return;
+  try {
+    await api(`/api/admin/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ communityUpdatesSuspended: suspended }) });
+    showMessage(`Community updates ${suspended ? 'suspended' : 'restored'}.`);
+    await loadUsers();
   } catch (error) { showMessage(error.message, true); }
 }
 

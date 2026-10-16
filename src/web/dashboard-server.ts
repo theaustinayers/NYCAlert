@@ -441,6 +441,32 @@ export class DashboardServer {
   }
 
   private async handleAccountRoutes(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
+    const communityNoteDeleteMatch = /^\/api\/account\/incidents\/([0-9a-f-]{36})\/community-notes\/([0-9a-f-]{36})$/i.exec(url.pathname);
+    if (communityNoteDeleteMatch) {
+      if (request.method !== 'DELETE') {
+        json(response, 405, { error: 'Method not allowed.' });
+        return true;
+      }
+      if (!this.accounts || !this.authConfig) {
+        json(response, 503, { error: 'Account services are not configured on this server.' });
+        return true;
+      }
+      const session = this.accounts.getSession(this.readSessionToken(request));
+      if (session?.kind !== 'admin') {
+        json(response, session?.kind === 'user' ? 403 : 401, { error: 'Only staff accounts can delete community notes.' });
+        return true;
+      }
+      if (!this.hasSameOrigin(request)) {
+        json(response, 403, { error: 'Request origin was not accepted.' });
+        return true;
+      }
+      const incidentId = communityNoteDeleteMatch[1]!;
+      const noteId = communityNoteDeleteMatch[2]!;
+      const deleted = this.store.deleteCommunityIncidentNote(incidentId, noteId);
+      if (deleted) logger.info({ action: 'community-incident-note-deleted', incidentId, noteId, actorId: session.account?.id ?? 'bootstrap-admin', role: session.role }, 'Staff deleted community note');
+      json(response, deleted ? 200 : 404, deleted ? { ok: true } : { error: 'Incident or community note not found.' });
+      return true;
+    }
     const communityNoteMatch = /^\/api\/account\/incidents\/([0-9a-f-]{36})\/community-notes$/i.exec(url.pathname);
     if (communityNoteMatch) {
       if (request.method !== 'POST') {
@@ -463,6 +489,10 @@ export class DashboardServer {
       const staffRole = session.kind === 'admin' ? session.role : undefined;
       if (!userAudience && !staffRole) {
         json(response, 403, { error: 'XMIT is available to approved Buff, News Media, administrator, moderator, and reviewer accounts.' });
+        return true;
+      }
+      if (userAudience && session.kind === 'user' && session.account.communityUpdatesSuspended) {
+        json(response, 403, { error: 'Community updates are suspended for this account. Contact an administrator.' });
         return true;
       }
       if (!this.hasSameOrigin(request)) {
@@ -1122,22 +1152,33 @@ export class DashboardServer {
         const body = await readJsonBody(request);
         const status = body.status;
         const webhookAccessSuspended = body.webhookAccessSuspended;
+        const communityUpdatesSuspended = body.communityUpdatesSuspended;
+        if (communityUpdatesSuspended !== undefined && !isAdmin) {
+          json(response, 403, { error: 'Only administrators can suspend community updates.' });
+          return true;
+        }
         if (webhookAccessSuspended !== undefined && typeof webhookAccessSuspended !== 'boolean') {
           json(response, 400, { error: 'Webhook access suspension must be true or false.' });
+          return true;
+        }
+        if (communityUpdatesSuspended !== undefined && typeof communityUpdatesSuspended !== 'boolean') {
+          json(response, 400, { error: 'Community update suspension must be true or false.' });
           return true;
         }
         if (status !== undefined && status !== 'approved' && status !== 'pending-approval' && status !== 'suspended') {
           json(response, 400, { error: 'Choose approved, pending-approval, or suspended.' });
           return true;
         }
-        if (status === undefined && webhookAccessSuspended === undefined) {
+        if (status === undefined && webhookAccessSuspended === undefined && communityUpdatesSuspended === undefined) {
           json(response, 400, { error: 'Provide an account status or webhookAccessSuspended value.' });
           return true;
         }
         let account = status !== undefined ? await this.accounts.updateAccount(match[1]!, { status: status as AccountStatus }) : this.accounts.listAdminAccounts().find((item) => item.id === match[1]!);
         if (webhookAccessSuspended !== undefined) account = await this.accounts.setWebhookAccessSuspended(match[1]!, webhookAccessSuspended as boolean);
+        if (communityUpdatesSuspended !== undefined) account = await this.accounts.setCommunityUpdatesSuspended(match[1]!, communityUpdatesSuspended as boolean);
         if (account && status !== undefined) logger.info({ action: 'audience-account-status-updated', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id, status }, 'Audience account status updated');
         if (account && webhookAccessSuspended !== undefined) logger.warn({ action: webhookAccessSuspended ? 'audience-webhook-access-suspended' : 'audience-webhook-access-restored', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id }, 'Audience account webhook access changed');
+        if (account && communityUpdatesSuspended !== undefined) logger.warn({ action: communityUpdatesSuspended ? 'community-updates-suspended' : 'community-updates-restored', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id }, 'Audience account community update permission changed');
         json(response, account ? 200 : 404, account ? { account } : { error: 'Account not found.' });
       } catch (error) {
         json(response, 400, { error: error instanceof Error ? error.message : 'Invalid request body.' });

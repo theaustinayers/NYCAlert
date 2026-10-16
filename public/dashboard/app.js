@@ -6,16 +6,13 @@ const state = {
   tickerFeaturedIncident: null, tickerFeaturedUntil: 0, tickerFeaturedTimer: null,
   map: null, mapLayer: null, mapMarkers: new Map(), mapHasFitBounds: false, mapTimer: null, mapExpiryTimer: null, mapEvents: null,
   mapFocusedIncidentId: null, mapPreviousView: null,
-  mapRefreshTimer: null, mapRefreshSequence: 0, liveUpdates: null, authSession: null, pendingAudience: null,
+  mapRefreshTimer: null, mapRefreshSequence: 0, liveUpdates: null, authSession: null, pendingAudience: null, incidentMapToastTimer: null,
   preferenceSaveTimer: null, preferenceSaveQueue: Promise.resolve(), applyingPreferences: false, presenceTimer: null,
   lastCommunityPromptAt: 0, communityPromptTimer: null,
   incidentPopupEnabled: true, incidentArrivalTimer: null, incidentArrivalId: null,
   feedMeterTargets: new Map(), feedMeterAnimationFrame: 0, lastFeedMeterFrameAt: 0
 };
 const voteDeviceId = getVoteDeviceId();
-  if (state.mapFocusedIncidentId && !visible.some((incident) => incident.id === state.mapFocusedIncidentId)) {
-    restoreIncidentMapView();
-  }
 const presenceBrowserToken = getPresenceBrowserToken();
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -31,6 +28,8 @@ function getCallType(item) {
   return undefined;
 }
 const boroughNames = ['Manhattan', 'Queens', 'Brooklyn', 'Bronx', 'Staten Island'];
+const homepageIncidentRetentionMs = 60 * 60_000;
+const homepageLiveCallRetentionMs = 30 * 60_000;
 const boroughParams = new URLSearchParams(location.search);
 const requestedBoroughs = boroughParams.getAll('borough');
 state.audience = ['public', 'buff', 'news'].includes(new URLSearchParams(location.search).get('audience'))
@@ -305,11 +304,28 @@ function isRecent(value) {
   return Number.isFinite(timestamp) && timestamp <= Date.now() && Date.now() - timestamp <= 30 * 60 * 1000;
 }
 
+function withinHomepageRetention(item, retentionMs, now = Date.now()) {
+  const timestamp = Date.parse(item.updatedAt || item.occurredAt);
+  return Number.isFinite(timestamp) && timestamp <= now && now - timestamp < retentionMs;
+}
+
+function retainRecentIncidents(incidents, now = Date.now()) {
+  return incidents.filter((incident) => withinHomepageRetention(incident, homepageIncidentRetentionMs, now));
+}
+
+function retainRecentLiveCalls(calls, now = Date.now()) {
+  return calls.filter((call) => withinHomepageRetention(call, homepageLiveCallRetentionMs, now));
+}
+
 function renderIncidents() {
+  state.incidents = retainRecentIncidents(state.incidents);
   const visible = state.incidents
     .filter((incident) => state.boroughs.has(incident.borough) || (state.boroughs.size > 0 && incident.borough === 'Citywide'))
     .filter((incident) => state.agency === 'all' || (incident.agencies?.includes(state.agency) ?? incident.agency === state.agency))
     .sort(compareIncidents);
+  if (state.mapFocusedIncidentId && !visible.some((incident) => incident.id === state.mapFocusedIncidentId)) {
+    restoreIncidentMapView();
+  }
   $('#incident-count').textContent = String(visible.length).padStart(2, '0');
   if (!visible.length) {
     if (state.mapFocusedIncidentId) restoreIncidentMapView();
@@ -372,6 +388,16 @@ function renderIncidents() {
       message.textContent = note.message;
       meta.append(author, time);
       item.append(meta, message, role);
+      if (state.authSession?.kind === 'admin') {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'community-note-delete';
+        remove.dataset.communityNoteDelete = note.id;
+        remove.dataset.incidentId = incident.id;
+        remove.textContent = 'Delete update';
+        remove.setAttribute('aria-label', `Delete community update by @${note.username}`);
+        item.append(remove);
+      }
       list.append(item);
     }
     details.append(summary, list);
@@ -423,6 +449,34 @@ function wireIncidentMapFocus() {
   });
 }
 
+function wireCommunityNoteDeletion() {
+  $('#incident-list').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-community-note-delete]');
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (state.authSession?.kind !== 'admin') return;
+    if (!confirm('Delete this community update from the incident?')) return;
+    button.disabled = true;
+    try {
+      const incidentId = button.dataset.incidentId;
+      const noteId = button.dataset.communityNoteDelete;
+      const response = await fetch(`/api/account/incidents/${encodeURIComponent(incidentId)}/community-notes/${encodeURIComponent(noteId)}`, {
+        method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not delete community update.');
+      const incident = state.incidents.find((item) => item.id === incidentId);
+      if (incident) incident.communityNotes = (incident.communityNotes || []).filter((note) => note.id !== noteId);
+      renderIncidents();
+      showIncidentMapMessage('Community update deleted.');
+    } catch (error) {
+      button.disabled = false;
+      showIncidentMapMessage(error instanceof Error ? error.message : 'Could not delete community update.');
+    }
+  });
+}
+
 function focusIncidentOnMap(incidentId) {
   if (!state.map || !state.mapMarkers.has(incidentId)) {
      showIncidentMapMessage('No verified map pin is available for this incident.');
@@ -435,13 +489,17 @@ function focusIncidentOnMap(incidentId) {
   if (!state.mapPreviousView) {
     state.mapPreviousView = { center: state.map.getCenter(), zoom: state.map.getZoom() };
   }
+  state.map.stop();
+  if (state.mapFocusedIncidentId) state.mapMarkers.get(state.mapFocusedIncidentId)?.closePopup();
   state.mapFocusedIncidentId = incidentId;
   document.querySelectorAll('[data-incident-card-id].map-focused').forEach((card) => card.classList.remove('map-focused'));
   const card = [...$('#incident-list').querySelectorAll('[data-incident-card-id]')].find((item) => item.dataset.incidentCardId === incidentId);
   card?.classList.add('map-focused');
   const marker = state.mapMarkers.get(incidentId);
-  state.map.flyTo(marker.getLatLng(), Math.max(state.map.getZoom(), 15), { duration: 0.55 });
-  marker.openPopup();
+  state.map.once('moveend', () => {
+    if (state.mapFocusedIncidentId === incidentId) marker.openPopup();
+  });
+  state.map.flyTo(marker.getLatLng(), 15, { duration: 0.55 });
   $('#incident-map').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
@@ -456,14 +514,14 @@ function restoreIncidentMapView() {
     state.map.flyTo(state.mapPreviousView.center, state.mapPreviousView.zoom, { duration: 0.55 });
   }
   state.mapPreviousView = null;
+}
 
-  function showIncidentMapMessage(message) {
-    const toast = $('#toast');
-    toast.textContent = message;
-    toast.classList.add('show');
-    if (state.incidentMapToastTimer) clearTimeout(state.incidentMapToastTimer);
-    state.incidentMapToastTimer = setTimeout(() => toast.classList.remove('show'), 3500);
-  }
+function showIncidentMapMessage(message) {
+  const toast = $('#toast');
+  toast.textContent = message;
+  toast.classList.add('show');
+  if (state.incidentMapToastTimer) clearTimeout(state.incidentMapToastTimer);
+  state.incidentMapToastTimer = setTimeout(() => toast.classList.remove('show'), 3500);
 }
 
 function wireIncidentVoting() {
@@ -596,6 +654,11 @@ function trackNewIncidents(incidents) {
     const latestUpdate = incident.updates.at(-1)?.summary || incident.summary;
     enqueueIncidentTicker({ ...incident, summary: latestUpdate, isUpdate: true }, 'update');
   }
+  const retainedIds = new Set(incidents.map((incident) => incident.id));
+  state.incidentIds = retainedIds;
+  state.incidentUpdateCounts = new Map(incidents.map((incident) => [incident.id, Number(incident.updateCount) || 0]));
+  for (const id of state.announcedIds) if (!retainedIds.has(id)) state.announcedIds.delete(id);
+  for (const id of state.freshIncidentIds.keys()) if (!retainedIds.has(id)) state.freshIncidentIds.delete(id);
   if (newlySeen.length || updated.length) renderIncidents();
 }
 
@@ -857,6 +920,7 @@ function initializeMap() {
 }
 
 function renderLiveCalls() {
+  state.calls = retainRecentLiveCalls(state.calls);
   const visible = state.calls.filter((call) => (state.boroughs.has(call.borough) || (state.boroughs.size > 0 && call.borough === 'Citywide'))
     && (state.agency === 'all' || call.agency === state.agency)
     && (!state.liveCategories || state.liveCategories.has(call.category)));
@@ -989,9 +1053,9 @@ async function refresh() {
     ]);
     if (!incidentResponse.ok || !callResponse.ok || !feedResponse.ok || !diagnosticResponse.ok) throw new Error('Dashboard API unavailable');
     const [incidentData, callData, feedData, diagnosticData] = await Promise.all([incidentResponse.json(), callResponse.json(), feedResponse.json(), diagnosticResponse.json()]);
-    state.incidents = Array.isArray(incidentData.incidents) ? incidentData.incidents : [];
+    state.incidents = retainRecentIncidents(Array.isArray(incidentData.incidents) ? incidentData.incidents : []);
     trackNewIncidents(state.incidents);
-    state.calls = Array.isArray(callData.calls) ? callData.calls : [];
+    state.calls = retainRecentLiveCalls(Array.isArray(callData.calls) ? callData.calls : []);
     state.feeds = Array.isArray(feedData.feeds) ? feedData.feeds : [];
     state.pipelines = diagnosticData.pipelines || {};
     renderFeeds();
@@ -1018,7 +1082,7 @@ async function refreshIncidents() {
     const response = await fetch(`/api/incidents?${params}`, { cache: 'no-store' });
     if (!response.ok) return;
     const data = await response.json();
-    state.incidents = Array.isArray(data.incidents) ? data.incidents : [];
+    state.incidents = retainRecentIncidents(Array.isArray(data.incidents) ? data.incidents : []);
     trackNewIncidents(state.incidents);
     renderIncidents();
   } catch { /* Periodic snapshot refresh will recover after a transient failure. */ }
@@ -1032,7 +1096,7 @@ async function refreshLiveCalls() {
     const response = await fetch(`/api/live-calls?${params}`, { cache: 'no-store' });
     if (!response.ok) return;
     const data = await response.json();
-    state.calls = Array.isArray(data.calls) ? data.calls : [];
+    state.calls = retainRecentLiveCalls(Array.isArray(data.calls) ? data.calls : []);
     renderLiveCalls();
   } catch { /* Periodic snapshot refresh will recover after a transient failure. */ }
 }
@@ -1081,6 +1145,7 @@ async function initialize() {
   wireAuthControls();
   wireIncidentShareControls();
   wireIncidentMapFocus();
+  wireCommunityNoteDeletion();
   wireIncidentVoting();
   wireLiveCallVoting();
   await loadAuthSession();
@@ -1311,6 +1376,7 @@ async function submitAuthForm(event) {
     state.authSession = result.session;
     await loadSavedDashboardPreferences();
     renderAuthHeader();
+    renderIncidents();
     $('#auth-modal').hidden = true;
     if (state.pendingAudience) {
       const requested = state.pendingAudience;

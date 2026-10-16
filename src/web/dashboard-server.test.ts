@@ -194,16 +194,20 @@ describe('DashboardServer account routes', () => {
       assert.equal(dashboardScript.status, 200);
       const dashboardSource = await dashboardScript.text();
       assert.doesNotMatch(dashboardSource, /callTypeFilter|initializeCallTypeFilters/);
+      assert.match(dashboardSource, /homepageIncidentRetentionMs = 60 \* 60_000/);
+      assert.match(dashboardSource, /homepageLiveCallRetentionMs = 30 \* 60_000/);
+      assert.match(dashboardSource, /state\.incidents = retainRecentIncidents/);
+      assert.match(dashboardSource, /state\.calls = retainRecentLiveCalls/);
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
-      assert.match(html, /\/admin\.js\?v=admin-call-types-private-usernames-20261015-3/);
+      assert.match(html, /\/admin\.js\?v=admin-community-updates-suspension-20261016-1/);
       assert.match(html, /id="update-website"/);
       const wordmark = await fetch(`${origin}/nyc-alert-wordmark.svg`);
       assert.equal(wordmark.status, 200);
       assert.match(wordmark.headers.get('content-type') ?? '', /image\/svg\+xml/);
       assert.match(await wordmark.text(), /NYC Alert/);
-      const script = await fetch(`${origin}/admin.js?v=admin-call-types-private-usernames-20261015-3`);
+      const script = await fetch(`${origin}/admin.js?v=admin-community-updates-suspension-20261016-1`);
       assert.equal(script.status, 200);
       assert.equal(script.headers.get('cache-control'), 'no-store');
       const adminScript = await script.text();
@@ -490,6 +494,12 @@ describe('DashboardServer account routes', () => {
       assert.equal(note.audience, 'buff');
       assert.equal(note.message, 'I observed a community detail.');
       assert.ok(Number.isFinite(Date.parse(note.createdAt)));
+
+      const audienceDelete = await fetch(`${endpoint}/${note.id}`, {
+        method: 'DELETE', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}'
+      });
+      assert.equal(audienceDelete.status, 403);
+
       const publicIncident = await fetch(`${origin}/api/v1/incidents/${incident.id}`);
       const data = await publicIncident.json() as { data: { updateCount: number; updatedAt: string; communityNotes: unknown[] } };
       assert.equal(data.data.communityNotes.length, 1);
@@ -503,17 +513,56 @@ describe('DashboardServer account routes', () => {
       assert.equal(adminLogin.status, 200);
       const adminCookie = adminLogin.headers.get('set-cookie')?.split(';')[0];
       assert.ok(adminCookie);
+      const suspended = await fetch(`${origin}/api/admin/accounts/${verified.id}`, {
+        method: 'PATCH', headers: { Origin: origin, Cookie: adminCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ communityUpdatesSuspended: true })
+      });
+      assert.equal(suspended.status, 200);
+      assert.equal((await suspended.json() as { account: { communityUpdatesSuspended: boolean } }).account.communityUpdatesSuspended, true);
+      const suspendedPost = await fetch(endpoint, {
+        method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'This update should be blocked.' })
+      });
+      assert.equal(suspendedPost.status, 403);
+      const restored = await fetch(`${origin}/api/admin/accounts/${verified.id}`, {
+        method: 'PATCH', headers: { Origin: origin, Cookie: adminCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ communityUpdatesSuspended: false })
+      });
+      assert.equal(restored.status, 200);
+
       const adminNoteResponse = await fetch(endpoint, {
         method: 'POST', headers: { Origin: origin, Cookie: adminCookie, 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: 'Staff follow-up from admin.' })
       });
       assert.equal(adminNoteResponse.status, 201);
-      const adminNote = (await adminNoteResponse.json() as { note: { username: string; role: string } }).note;
+      const adminNote = (await adminNoteResponse.json() as { note: { id: string; username: string; role: string } }).note;
       assert.equal(adminNote.username, 'owner');
       assert.equal(adminNote.role, 'owner');
+
+      const moderatorInvite = await accounts.inviteAdministrator({
+        firstName: 'Test', lastName: 'Moderator', username: 'test_moderator', email: 'test-note-moderator@example.test', role: 'moderator'
+      });
+      const moderator = await accounts.completeAdminInvitation(moderatorInvite.invitationToken, 'Strong-moderator-password-123');
+      const moderatorSuspend = await fetch(`${origin}/api/admin/accounts/${verified.id}`, {
+        method: 'PATCH', headers: { Origin: origin, Cookie: `nycalert_session=${moderator.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ communityUpdatesSuspended: true })
+      });
+      assert.equal(moderatorSuspend.status, 403);
+      const moderatorDelete = await fetch(`${endpoint}/${adminNote.id}`, {
+        method: 'DELETE', headers: { Origin: origin, Cookie: `nycalert_session=${moderator.token}`, 'Content-Type': 'application/json' }, body: '{}'
+      });
+      assert.equal(moderatorDelete.status, 200);
+      const reviewerInvite = await accounts.inviteAdministrator({
+        firstName: 'Test', lastName: 'Reviewer', username: 'test_reviewer', email: 'test-note-reviewer@example.test', role: 'reviewer'
+      });
+      const reviewer = await accounts.completeAdminInvitation(reviewerInvite.invitationToken, 'Strong-reviewer-password-123');
+      const reviewerDelete = await fetch(`${endpoint}/${note.id}`, {
+        method: 'DELETE', headers: { Origin: origin, Cookie: `nycalert_session=${reviewer.token}`, 'Content-Type': 'application/json' }, body: '{}'
+      });
+      assert.equal(reviewerDelete.status, 200);
       const afterAdminNote = await fetch(`${origin}/api/v1/incidents/${incident.id}`);
       const afterAdminData = await afterAdminNote.json() as { data: { updateCount: number; communityNotes: unknown[] } };
-      assert.equal(afterAdminData.data.communityNotes.length, 2);
+      assert.equal(afterAdminData.data.communityNotes.length, 0);
       assert.equal(afterAdminData.data.updateCount, 0);
     } finally { await server.stop(); }
   });

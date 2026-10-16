@@ -502,6 +502,23 @@ export class DashboardStore {
     return note;
   }
 
+  deleteCommunityIncidentNote(incidentId: string, noteId: string): boolean {
+    if (!this.getIncident(incidentId)) return false;
+    const deleted = this.incidentDatabase
+      ? this.incidentDatabase.deleteCommunityNote(incidentId, noteId)
+      : this.deleteInMemoryCommunityNote(incidentId, noteId);
+    if (deleted) this.notifyIncidentChange();
+    return deleted;
+  }
+
+  private deleteInMemoryCommunityNote(incidentId: string, noteId: string): boolean {
+    const notes = this.communityIncidentNotes.get(incidentId) ?? [];
+    const remaining = notes.filter((note) => note.id !== noteId);
+    if (remaining.length === notes.length) return false;
+    this.communityIncidentNotes.set(incidentId, remaining);
+    return true;
+  }
+
   search(query = '', boroughs?: readonly Borough[]): DashboardIncident[] {
     if (this.incidentDatabase) return this.incidentDatabase.list(query, boroughs).map((incident) => this.withAudioAvailability(incident));
     const normalized = query.trim().toLowerCase();

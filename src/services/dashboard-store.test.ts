@@ -68,6 +68,9 @@ describe('DashboardStore', () => {
     assert.equal(reopened.listIncidentPage('', ['Queens'], 'fire', 10, 0).total, 1);
     assert.equal(reopened.listIncidentPage('', ['Brooklyn'], 'fire', 10, 0).total, 0);
     assert.equal(reopened.listMapIncidents(Date.now() + 30_000).length, 1);
+    assert.equal(reopened.deleteCommunityIncidentNote(incident.id, communityNote.id), true);
+    assert.deepEqual(reopened.getIncident(incident.id)?.communityNotes, []);
+    assert.equal(reopened.deleteCommunityIncidentNote(incident.id, communityNote.id), false);
     assert.equal(await reopened.deleteIncident(incident.id), true);
     assert.equal(reopened.search().length, 0);
     reopened.close();

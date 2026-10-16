@@ -2,3 +2,5 @@
 
 /* Staff-authored community-note role colors. */
 .community-note-role.staff-owner,.community-note-role.staff-admin{color:#ff8e78}.community-note-role.staff-moderator{color:#f2ce66}.community-note-role.staff-reviewer{color:#91d49a}
+
+.community-note-delete{margin:8px 0 0;padding:4px 8px;border:1px solid #73494b;border-radius:5px;background:#241719;color:#ffb7bb;font:700 9px var(--mono);cursor:pointer}.community-note-delete:hover{border-color:#ff7878;background:#3a1c20;color:#fff}.community-note-delete:disabled{opacity:.55;cursor:wait}
