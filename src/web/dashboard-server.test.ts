@@ -111,7 +111,7 @@ describe('DashboardServer account routes', () => {
       assert.match(emscadStylesText, /\.status-xmit/);
       assert.match(emscadStylesText, /\.mdt-status\.composer-visible>span:first-child\{visibility:hidden\}/);
       assert.match(emscadStylesText, /\.mdt-status\{grid-column:1\/-1;grid-row:2;display:flex/);
-      assert.match(emscadStylesText, /\.mdt-status\{display:grid;grid-template-columns:minmax\(0,1fr\) clamp\(110px,4\.1vw,150px\) clamp\(225px,8\.5vw,310px\)/);
+      assert.match(emscadStylesText, /\.mdt-status\{display:grid;grid-template-columns:minmax\(0,1fr\) clamp\(110px,4\.1vw,150px\) clamp\(300px,11vw,360px\)/);
       assert.match(emscadStylesText, /\.status-xmit\{grid-column:2;grid-row:1/);
       assert.match(emscadStylesText, /\.mdt-status time\{grid-column:3;grid-row:1/);
       assert.match(emscadStylesText, /\.mdt-xmit-editor\{[^}]*font:inherit/);
