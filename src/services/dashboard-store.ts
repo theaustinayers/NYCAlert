@@ -34,6 +34,14 @@ export interface DashboardIncidentInput {
   communitySourceCallId?: string;
 }
 
+export interface CommunityIncidentNote {
+  id: string;
+  username: string;
+  audience: 'buff' | 'news';
+  message: string;
+  createdAt: string;
+}
+
 export interface DashboardIncident {
   id: string;
   title: string;
@@ -55,6 +63,7 @@ export interface DashboardIncident {
   boxNumbers: string[];
   updateCount: number;
   updates: Array<{ agency: Agency; headline?: string; summary: string; occurredAt: string; unitIds: string[]; unitAssignments: RadioUnitAssignment[]; boxNumbers: string[]; location?: string; previousLocation?: string; isExplicitLocationCorrection?: boolean }>;
+  communityNotes?: CommunityIncidentNote[];
   confidence: number;
   newsworthinessScore: number;
   buffInterestScore: number;
@@ -157,6 +166,7 @@ export class DashboardStore {
   private feedStatusProvider?: () => BroadcastifyFeedStatus[];
   private readonly incidentChangeListeners = new Set<() => void>();
   private readonly liveCallChangeListeners = new Set<() => void>();
+  private readonly communityIncidentNotes = new Map<string, CommunityIncidentNote[]>();
   private readonly feedStatusChangeListeners = new Set<() => void>();
   private readonly feedAlerts = new Map<string, { severity: 'newsworthy' | 'breaking'; until: number }>();
   private readonly feedCallActivity = new Map<string, number[]>();
@@ -474,13 +484,30 @@ export class DashboardStore {
     return updated;
   }
 
+  addCommunityIncidentNote(incidentId: string, input: { username: string; audience: 'buff' | 'news'; message: string }): CommunityIncidentNote | undefined {
+    if (!this.getIncident(incidentId)) return undefined;
+    const note: CommunityIncidentNote = {
+      id: randomUUID(),
+      username: input.username.trim().slice(0, 24),
+      audience: input.audience,
+      message: input.message.trim().replace(/[\r\n\t]+/g, ' ').slice(0, 500),
+      createdAt: new Date().toISOString()
+    };
+    if (!note.username || !note.message) throw new Error('A username and community note message are required.');
+    if (this.incidentDatabase) this.incidentDatabase.addCommunityNote(incidentId, note);
+    else this.communityIncidentNotes.set(incidentId, [...(this.communityIncidentNotes.get(incidentId) ?? []), note]);
+    this.notifyIncidentChange();
+    return note;
+  }
+
   search(query = '', boroughs?: readonly Borough[]): DashboardIncident[] {
     if (this.incidentDatabase) return this.incidentDatabase.list(query, boroughs).map((incident) => this.withAudioAvailability(incident));
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return this.incidents.filter((incident) => boroughMatches(incident.borough, boroughs));
-    return this.incidents.filter((incident) => boroughMatches(incident.borough, boroughs) &&
+    const matches = !normalized ? this.incidents.filter((incident) => boroughMatches(incident.borough, boroughs))
+      : this.incidents.filter((incident) => boroughMatches(incident.borough, boroughs) &&
       stripActingAsTarget(`${incident.title} ${incident.summary} ${incident.updates.map((update) => `${update.summary} ${update.unitIds.join(' ')} ${update.boxNumbers.join(' ')}`).join(' ')} ${incident.unitIds.join(' ')} ${incident.boxNumbers.join(' ')} ${incident.agency} ${incident.borough} ${incident.category}`).toLowerCase().includes(normalized)
-    );
+      );
+    return matches.map((incident) => this.withAudioAvailability(incident));
   }
 
   getIncident(incidentId: string): DashboardIncident | undefined {
@@ -537,6 +564,7 @@ export class DashboardStore {
     if (!this.incidentDatabase && index >= 0) this.incidents.splice(index, 1);
     const audio = this.audioFiles.get(incidentId);
     this.audioFiles.delete(incidentId);
+    this.communityIncidentNotes.delete(incidentId);
     if (audio) await this.releaseAudio(audio.path);
     this.notifyIncidentChange();
     return true;
@@ -562,7 +590,11 @@ export class DashboardStore {
   }
 
   private withAudioAvailability(incident: DashboardIncident): DashboardIncident {
-    return { ...incident, hasAudio: Boolean(this.audioFiles.get(incident.id)) };
+    return {
+      ...incident,
+      hasAudio: Boolean(this.audioFiles.get(incident.id)),
+      communityNotes: this.incidentDatabase ? incident.communityNotes ?? [] : [...(this.communityIncidentNotes.get(incident.id) ?? [])]
+    };
   }
 
   private async trimAudioReferences(): Promise<void> {

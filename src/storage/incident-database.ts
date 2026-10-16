@@ -5,7 +5,7 @@ import type { Agency, Borough } from '../domain/subscriptions.js';
 import type { CallType } from '../domain/call-type.js';
 import type { AlertCategory, IncidentType, RadioUnitAssignment } from '../domain/triage.js';
 import type { LocationPrecision } from '../domain/location.js';
-import type { DashboardIncident } from '../services/dashboard-store.js';
+import type { CommunityIncidentNote, DashboardIncident } from '../services/dashboard-store.js';
 
 interface IncidentRow {
   id: string;
@@ -47,6 +47,15 @@ interface IncidentUpdateRow {
   unit_ids_json: string;
   unit_assignments_json: string;
   box_numbers_json: string;
+}
+
+interface CommunityNoteRow {
+  id: string;
+  incident_id: string;
+  username: string;
+  audience: 'buff' | 'news';
+  message: string;
+  created_at: string;
 }
 
 interface IncidentWriteRow {
@@ -106,6 +115,15 @@ const schema = `
     UNIQUE (incident_id, seq)
   );
   CREATE INDEX IF NOT EXISTS incident_updates_parent_seq_idx ON incident_updates(incident_id, seq);
+  CREATE TABLE IF NOT EXISTS incident_community_notes (
+    id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
+    audience TEXT NOT NULL CHECK (audience IN ('buff', 'news')),
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS incident_community_notes_parent_created_idx ON incident_community_notes(incident_id, created_at);
   CREATE VIRTUAL TABLE IF NOT EXISTS incidents_fts USING fts5(incident_id UNINDEXED, title, summary, location, units, boxes, tokenize='unicode61 remove_diacritics 2');
 `;
 
@@ -127,12 +145,12 @@ export class IncidentDatabase {
     database.pragma('foreign_keys = ON');
     database.pragma('busy_timeout = 5000');
     const version = Number(database.pragma('user_version', { simple: true }));
-    if (version > 1) {
+    if (version > 2) {
       database.close();
       throw new Error(`Incident database schema version ${version} is newer than this application supports.`);
     }
     database.exec(schema);
-    if (version === 0) database.pragma('user_version = 1');
+    if (version < 2) database.pragma('user_version = 2');
     await chmod(dirname(this.filePath), 0o700);
     await chmod(this.filePath, 0o600);
     this.database = database;
@@ -177,6 +195,11 @@ export class IncidentDatabase {
   get(id: string): DashboardIncident | undefined {
     const row = this.getDatabase().prepare('SELECT * FROM incidents WHERE id = ?').get(id) as IncidentRow | undefined;
     return row ? this.hydrate([row])[0] : undefined;
+  }
+
+  addCommunityNote(incidentId: string, note: CommunityIncidentNote): void {
+    this.getDatabase().prepare(`INSERT INTO incident_community_notes (id, incident_id, username, audience, message, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)`).run(note.id, incidentId, note.username, note.audience, note.message, note.createdAt);
   }
 
   list(query = '', boroughs?: readonly Borough[], limit = 100_000, offset = 0, callType?: CallType): DashboardIncident[] {
@@ -263,6 +286,7 @@ export class IncidentDatabase {
     if (!rows.length) return [];
     const ids = rows.map((row) => row.id);
     const updatesByIncident = new Map<string, DashboardIncident['updates']>();
+    const communityNotesByIncident = new Map<string, CommunityIncidentNote[]>();
     for (let start = 0; start < ids.length; start += 400) {
       const batch = ids.slice(start, start + 400);
       const placeholders = batch.map(() => '?').join(',');
@@ -282,6 +306,12 @@ export class IncidentDatabase {
           ...(update.is_explicit_location_correction ? { isExplicitLocationCorrection: true } : {})
         });
         updatesByIncident.set(update.incident_id, updates);
+      }
+      const communityNotes = this.getDatabase().prepare(`SELECT * FROM incident_community_notes WHERE incident_id IN (${placeholders}) ORDER BY incident_id, created_at, id`).all(...batch) as CommunityNoteRow[];
+      for (const note of communityNotes) {
+        const notes = communityNotesByIncident.get(note.incident_id) ?? [];
+        notes.push({ id: note.id, username: note.username, audience: note.audience, message: note.message, createdAt: note.created_at });
+        communityNotesByIncident.set(note.incident_id, notes);
       }
     }
     return rows.map((row) => {
@@ -307,6 +337,7 @@ export class IncidentDatabase {
         boxNumbers: parseJson<string[]>(row.box_numbers_json, []),
         updateCount: updates.length,
         updates,
+        communityNotes: communityNotesByIncident.get(row.id) ?? [],
         confidence: row.confidence,
         newsworthinessScore: row.newsworthiness_score,
         buffInterestScore: row.buff_interest_score,

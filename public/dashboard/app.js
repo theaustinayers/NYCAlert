@@ -341,6 +341,37 @@ function renderIncidents() {
     </article>`;
   });
   syncKeyedArticles($('#incident-list'), cards, 'data-incident-card-id', unitHistoryBanner);
+  for (const incident of visible) {
+    const card = [...$('#incident-list').querySelectorAll('[data-incident-card-id]')]
+      .find((item) => item.dataset.incidentCardId === incident.id);
+    card?.querySelector('.community-note-list')?.remove();
+    if (!card || !incident.communityNotes?.length) continue;
+    const details = document.createElement('details');
+    details.className = 'community-note-list';
+    const summary = document.createElement('summary');
+    summary.textContent = `${incident.communityNotes.length} unverified community note${incident.communityNotes.length === 1 ? '' : 's'}`;
+    const list = document.createElement('ol');
+    for (const note of incident.communityNotes) {
+      const item = document.createElement('li');
+      const meta = document.createElement('div');
+      meta.className = 'community-note-list-meta';
+      const author = document.createElement('strong');
+      author.textContent = `@${note.username}`;
+      const role = document.createElement('span');
+      role.className = `community-note-role ${note.audience === 'buff' ? 'buff' : 'news'}`;
+      role.textContent = note.audience === 'buff' ? 'BUFF' : 'NEWS MEDIA';
+      const time = document.createElement('time');
+      time.dateTime = note.createdAt;
+      time.textContent = formatTime(note.createdAt);
+      const message = document.createElement('p');
+      message.textContent = note.message;
+      meta.append(author, time);
+      item.append(meta, message, role);
+      list.append(item);
+    }
+    details.append(summary, list);
+    card.append(details);
+  }
 }
 
 function wireIncidentShareControls() {

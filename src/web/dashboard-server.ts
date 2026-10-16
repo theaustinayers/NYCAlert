@@ -39,6 +39,7 @@ const staticFiles = new Map<string, [string, string]>([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.css', ['app.css', 'text/css; charset=utf-8']],
   ['/webhooks.css', ['webhooks.css', 'text/css; charset=utf-8']],
+  ['/community-notes.css', ['community-notes.css', 'text/css; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/live.css', ['live.css', 'text/css; charset=utf-8']],
   ['/live-overflow.css', ['live-overflow.css', 'text/css; charset=utf-8']],
@@ -51,6 +52,7 @@ const staticFiles = new Map<string, [string, string]>([
   ['/mdt-retro.css', ['mdt-retro.css', 'text/css; charset=utf-8']],
   ['/mdt-pagination.css', ['mdt-pagination.css', 'text/css; charset=utf-8']],
   ['/mdt.js', ['mdt.js', 'text/javascript; charset=utf-8']],
+  ['/fdny_mdt_run.mp3', ['fdny_mdt_run.mp3', 'audio/mpeg']],
   ['/mobile.css', ['mobile.css', 'text/css; charset=utf-8']],
   ['/incident.css', ['incident.css', 'text/css; charset=utf-8']],
   ['/incident.js', ['incident.js', 'text/javascript; charset=utf-8']],
@@ -444,6 +446,58 @@ export class DashboardServer {
   }
 
   private async handleAccountRoutes(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
+    const communityNoteMatch = /^\/api\/account\/incidents\/([0-9a-f-]{36})\/community-notes$/i.exec(url.pathname);
+    if (communityNoteMatch) {
+      if (request.method !== 'POST') {
+        json(response, 405, { error: 'Method not allowed.' });
+        return true;
+      }
+      if (!this.accounts || !this.authConfig) {
+        json(response, 503, { error: 'Account services are not configured on this server.' });
+        return true;
+      }
+      const session = this.accounts.getSession(this.readSessionToken(request));
+      if (session?.kind !== 'user') {
+        json(response, 401, { error: 'Log in with an approved Buff or News Media account to XMIT a community note.' });
+        return true;
+      }
+      if (session.account.accountType !== 'buff' && session.account.accountType !== 'news') {
+        json(response, 403, { error: 'Only Buff and News Media accounts can XMIT community notes.' });
+        return true;
+      }
+      if (!this.hasSameOrigin(request)) {
+        json(response, 403, { error: 'Request origin was not accepted.' });
+        return true;
+      }
+      if (!this.takeRateLimit(request, 'community-incident-note', 30, 60_000)
+        || !this.takeRateLimit(request, `community-incident-note-account:${session.account.id}`, 5, 60 * 60_000, 'global')) {
+        json(response, 429, { error: 'Community notes are rate-limited. Try again later.' });
+        return true;
+      }
+      try {
+        const body = await readJsonBody(request);
+        const message = typeof body.message === 'string' ? body.message.trim().replace(/[\r\n\t]+/g, ' ') : '';
+        if (!message || message.length > 500 || /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(message)) {
+          json(response, 400, { error: 'Enter a community note of 1–500 printable characters.' });
+          return true;
+        }
+        const audience = session.account.accountType;
+        const note = this.store.addCommunityIncidentNote(communityNoteMatch[1]!, {
+          username: session.account.username,
+          audience,
+          message
+        });
+        if (!note) {
+          json(response, 404, { error: 'Incident not found.' });
+          return true;
+        }
+        logger.info({ action: 'community-incident-note-created', incidentId: communityNoteMatch[1], accountId: session.account.id, noteId: note.id, audience }, 'Community note added to incident');
+        json(response, 201, { note });
+      } catch (error) {
+        json(response, 400, { error: error instanceof Error ? error.message : 'Could not add the community note.' });
+      }
+      return true;
+    }
     if (url.pathname === '/api/account/profile') {
       if (!this.accounts || !this.authConfig) {
         json(response, 503, { error: 'Account services are not configured on this server.' });

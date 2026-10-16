@@ -123,7 +123,17 @@ describe('DashboardServer account routes', () => {
       assert.match(html, /Licensed to: City of New York Fire Department EMSCAD/);
       assert.match(html, /id="mdt-last-incident-age"/);
       assert.doesNotMatch(html, /data-call-type=/);
-      assert.match(html, /data-view="all"/);
+      assert.match(html, /data-view="dispatch"/);
+      assert.match(html, /id="mdt-hold"/);
+      assert.match(html, /id="mdt-logon"/);
+      assert.match(html, /id="mdt-sound-toggle"/);
+      assert.match(html, /id="mdt-incident-alert"/);
+      assert.match(html, /id="mdt-xmit-form"/);
+      assert.match(html, /id="mdt-logon-modal"/);
+      assert.match(html, /value="Manhattan"/);
+      assert.match(html, /value="FDNY"/);
+      assert.match(html, /id="message-list-config"/);
+      assert.match(html, /parser-assigned agency/);
       assert.match(html, /not an official FDNY system/);
       assert.match(html, /does not display Live Radio traffic, raw transcripts/);
       const stylesheet = await fetch(`${origin}/mdt.css`);
@@ -131,8 +141,11 @@ describe('DashboardServer account routes', () => {
       assert.match(await stylesheet.text(), /\.incident-stream/);
       const emscadStyles = await fetch(`${origin}/mdt-emscad.css`);
       assert.equal(emscadStyles.status, 200);
-      assert.match(await emscadStyles.text(), /grid-template-columns:1\.3fr/);
-      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-1`);
+      const emscadStylesText = await emscadStyles.text();
+      assert.match(emscadStylesText, /grid-template-columns:1\.3fr/);
+      assert.match(emscadStylesText, /\.status-xmit/);
+      assert.match(emscadStylesText, /\.community-note-role\.buff/);
+      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-4`);
       assert.equal(script.status, 200);
       const source = await script.text();
       assert.match(source, /incidents-updated/);
@@ -140,9 +153,19 @@ describe('DashboardServer account routes', () => {
       assert.match(source, /updateLastIncidentAge/);
       assert.match(source, /refreshLatestIncident/);
       assert.match(source, /Math\.random\(\) \* 2001/);
-      assert.match(source, /if \(!state\.started\) return/);
+      assert.match(source, /if \(!state\.started \|\| state\.hold\) return/);
       assert.doesNotMatch(source, /OFFLINE|LIVE CONNECTION/);
       assert.doesNotMatch(source, /data-call-type/);
+      assert.match(source, /if \(!state\.started \|\| state\.hold\) return/);
+      assert.match(source, /state\.selectedBoroughs/);
+      assert.match(source, /state\.selectedAgencies/);
+      assert.match(source, /newestIncident/);
+      assert.match(source, /selectedBoroughs\.filter/);
+      assert.match(source, /state\.hold = !state\.hold/);
+      assert.match(source, /communityNotes/);
+      assert.match(source, /\/api\/account\/incidents\//);
+      assert.match(source, /play < 4/);
+      assert.match(source, /state\.hasLoadedSnapshot/);
       assert.match(source, /loadOlderIncidents/);
       assert.doesNotMatch(source, /\/api\/live-calls/);
     } finally { await server.stop(); }
@@ -202,6 +225,9 @@ describe('DashboardServer account routes', () => {
       const webhookStylesText = await webhookStyles.text();
       assert.match(webhookStylesText, /\.webhook-manager/);
       assert.match(webhookStylesText, /\.webhook-manager\[hidden\]\{display:none!important\}/);
+      const communityStyles = await fetch(`${origin}/community-notes.css`);
+      assert.equal(communityStyles.status, 200);
+      assert.match(await communityStyles.text(), /\.community-note-role\.buff/);
     } finally { await server.stop(); }
   });
 
@@ -372,6 +398,65 @@ describe('DashboardServer account routes', () => {
       assert.deepEqual(await updated.json(), { username: 'New_Handle' });
       assert.equal((await fetch(`${origin}/api/auth/session`, { headers: { Cookie: cookie } }).then((response) => response.text())).includes('Private'), false);
       assert.equal(accounts.listAdminAccounts().find((account) => account.id === verified.id)?.firstName, 'Private');
+    } finally { await server.stop(); }
+  });
+
+  it('accepts attributed XMIT community notes only from approved Buff or News Media accounts', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const accounts = new AccountStore(join(testDirectory, 'community-note-auth'));
+    await accounts.init();
+    const registered = await accounts.register({
+      username: 'trusted_buff', firstName: 'Private', lastName: 'Name', email: 'community-note@example.test',
+      phone: '2125550100', usageCase: 'Testing authenticated incident community notes.', accountType: 'buff', password: 'Strong-test-password-123'
+    });
+    const verified = await accounts.verifyEmail(registered.verificationToken);
+    await accounts.updateAccount(verified.id, { status: 'approved' });
+    const store = new DashboardStore(false);
+    const incident = await store.publish({
+      title: 'Working Fire', headline: 'Working Fire', summary: 'Published incident summary.', occurredAt: new Date(),
+      agency: 'FDNY', borough: 'Brooklyn', category: 'newsworthy', confidence: 0.9, newsworthinessScore: 4
+    });
+    const initialUpdatedAt = incident.updatedAt;
+    const server = new DashboardServer(store, port, '127.0.0.1', undefined, accounts, {
+      publicUrl: origin, trustProxy: true, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+    });
+    await server.start();
+    try {
+      const endpoint = `${origin}/api/account/incidents/${incident.id}/community-notes`;
+      const anonymous = await fetch(endpoint, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'Anonymous note' })
+      });
+      assert.equal(anonymous.status, 401);
+
+      const login = await fetch(`${origin}/api/auth/login`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: verified.email, password: 'Strong-test-password-123' })
+      });
+      assert.equal(login.status, 200);
+      const cookie = login.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(cookie);
+
+      const crossOrigin = await fetch(endpoint, {
+        method: 'POST', headers: { Origin: 'https://attacker.example', Cookie: cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Cross-origin note' })
+      });
+      assert.equal(crossOrigin.status, 403);
+      const response = await fetch(endpoint, {
+        method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'spoofed_name', audience: 'news', message: 'I observed a community detail.' })
+      });
+      assert.equal(response.status, 201);
+      const { note } = await response.json() as { note: { id: string; username: string; audience: string; message: string; createdAt: string } };
+      assert.equal(note.username, 'trusted_buff');
+      assert.equal(note.audience, 'buff');
+      assert.equal(note.message, 'I observed a community detail.');
+      assert.ok(Number.isFinite(Date.parse(note.createdAt)));
+      const publicIncident = await fetch(`${origin}/api/v1/incidents/${incident.id}`);
+      const data = await publicIncident.json() as { data: { updateCount: number; updatedAt: string; communityNotes: unknown[] } };
+      assert.equal(data.data.communityNotes.length, 1);
+      assert.equal(data.data.updateCount, 0);
+      assert.equal(data.data.updatedAt, initialUpdatedAt);
     } finally { await server.stop(); }
   });
 

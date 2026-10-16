@@ -43,6 +43,15 @@ describe('DashboardStore', () => {
         unitIds: [], confidence: 0.96, newsworthinessScore: 4, buffInterestScore: 5, assignmentDeskScore: 4, category: 'newsworthy'
       });
     }
+    const officialUpdateCount = store.getIncident(incident.id)?.updateCount;
+    const officialUpdatedAt = store.getIncident(incident.id)?.updatedAt;
+    const communityNote = store.addCommunityIncidentNote(incident.id, {
+      username: 'public_buff', audience: 'buff', message: 'Community observation; not independently verified.'
+    });
+    assert.equal(communityNote?.username, 'public_buff');
+    assert.equal(communityNote?.audience, 'buff');
+    assert.equal(store.getIncident(incident.id)?.updateCount, officialUpdateCount);
+    assert.equal(store.getIncident(incident.id)?.updatedAt, officialUpdatedAt);
     store.close();
 
     const reopened = new DashboardStore(false, 300, false, 100, new IncidentDatabase(directory));
@@ -52,6 +61,7 @@ describe('DashboardStore', () => {
     assert.equal(restored.location, '100 Example Street');
     assert.equal(restored.updateCount, 13);
     assert.equal(restored.updates.length, 13);
+    assert.deepEqual(restored.communityNotes, [communityNote]);
     assert.match(restored.updates[0]?.summary ?? '', /Police unit assisting/);
     assert.deepEqual(restored.updates[0]?.unitIds, ['NYPD CAR 1234']);
     assert.equal(reopened.search('assisting', ['Queens']).length, 1);
