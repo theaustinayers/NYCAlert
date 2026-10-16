@@ -27,6 +27,7 @@ export interface AccountWebhookSummary { id: string; name: string; platform?: We
 export interface AccountRecord {
   id: string;
   username: string;
+  usernameLocked?: boolean;
   firstName: string;
   lastName: string;
   email: string;
@@ -203,31 +204,40 @@ export class AccountStore {
     return true;
   }
 
-  async inviteAdministrator(input: { firstName: string; lastName: string; email: string; role?: AccountRoleName }): Promise<{ account: PublicAccount; invitationToken: string }> {
+  async inviteAdministrator(input: { firstName: string; lastName: string; email: string; username?: string; role?: AccountRoleName }): Promise<{ account: PublicAccount; invitationToken: string }> {
     const email = input.email.trim().toLowerCase();
     if (!email.includes('@') || !input.firstName.trim() || !input.lastName.trim()) throw new Error('Enter the administrator name and a valid email address.');
     if (this.accounts.some((account) => account.email === email)) throw new Error('An account already exists for this email.');
+    const requestedUsername = input.username?.trim() ?? '';
+    const username = requestedUsername ? this.requireAvailableUsername(requestedUsername) : '';
     const passwordSalt = randomBytes(16).toString('hex');
     const token = randomBytes(32).toString('base64url');
     const account: AccountRecord = {
-      id: randomBytes(16).toString('hex'), username: '', firstName: input.firstName.trim().slice(0, 80), lastName: input.lastName.trim().slice(0, 80),
+      id: randomBytes(16).toString('hex'), username, ...(username ? { usernameLocked: true } : {}), firstName: input.firstName.trim().slice(0, 80), lastName: input.lastName.trim().slice(0, 80),
       email, phone: '', usageCase: `${input.role ?? 'admin'} invitation`, accountType: 'reviewer', isAdmin: true, adminRole: input.role ?? 'admin',
       status: 'pending-verification', createdAt: new Date().toISOString(), passwordSalt,
       passwordHash: hashPassword(randomBytes(32).toString('hex'), passwordSalt),
       verificationTokenHash: hashToken(token), verificationExpiresAt: Date.now() + verifyLifetimeMs, webhooks: []
     };
-    account.username = uniqueGeneratedUsername(account.id, new Set(this.accounts.map((item) => item.username?.toLowerCase()).filter((item): item is string => Boolean(item))));
     this.accounts.push(account);
     await this.persist();
     return { account: this.publicView(account), invitationToken: token };
   }
 
-  async completeAdminInvitation(token: string, password: string, requestedUsername: string): Promise<{ token: string; account: PublicAccount }> {
+  async completeAdminInvitation(token: string, password: string, requestedUsername = ''): Promise<{ token: string; account: PublicAccount }> {
     if (password.length < 16 || password.length > 128) throw new Error('Administrator password must be between 16 and 128 characters.');
     const tokenHash = hashToken(token);
     const account = this.accounts.find((item) => item.isAdmin && item.verificationTokenHash === tokenHash && (item.verificationExpiresAt ?? 0) > Date.now());
     if (!account) throw new Error('Administrator invitation is invalid or expired.');
-    account.username = this.requireAvailableUsername(requestedUsername, account.id);
+    const chosenUsername = requestedUsername.trim();
+    if (account.usernameLocked) {
+      if (chosenUsername && chosenUsername.toLowerCase() !== account.username.toLowerCase()) throw new Error('This invitation has a username assigned by the administrator.');
+    } else if (chosenUsername) {
+      account.username = this.requireAvailableUsername(chosenUsername, account.id);
+    } else if (!normalizeUsername(account.username)) {
+      throw new Error('Choose a public username using 3–24 letters, numbers, or underscores.');
+    }
+    delete account.usernameLocked;
     account.passwordSalt = randomBytes(16).toString('hex');
     account.passwordHash = hashPassword(password, account.passwordSalt);
     account.emailVerifiedAt = new Date().toISOString();

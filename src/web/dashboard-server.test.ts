@@ -195,13 +195,13 @@ describe('DashboardServer account routes', () => {
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
-      assert.match(html, /\/admin\.js\?v=admin-call-types-private-usernames-20261015-2/);
+      assert.match(html, /\/admin\.js\?v=admin-call-types-private-usernames-20261015-3/);
       assert.match(html, /id="update-website"/);
       const wordmark = await fetch(`${origin}/nyc-alert-wordmark.svg`);
       assert.equal(wordmark.status, 200);
       assert.match(wordmark.headers.get('content-type') ?? '', /image\/svg\+xml/);
       assert.match(await wordmark.text(), /NYC Alert/);
-      const script = await fetch(`${origin}/admin.js?v=admin-call-types-private-usernames-20261015-2`);
+      const script = await fetch(`${origin}/admin.js?v=admin-call-types-private-usernames-20261015-3`);
       assert.equal(script.status, 200);
       assert.equal(script.headers.get('cache-control'), 'no-store');
       const adminScript = await script.text();

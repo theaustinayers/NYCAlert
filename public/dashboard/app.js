@@ -1087,6 +1087,7 @@ async function loadAuthSession() {
   const params = new URLSearchParams(location.search);
   const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
   const adminInviteToken = hashParams.get('adminInvite') || params.get('adminInvite');
+  const invitedUsername = hashParams.get('adminUsername') || '';
   const verificationToken = hashParams.get('verify') || params.get('verify');
   const requestedAuthMode = params.get('auth');
   const requestedProfile = params.get('profile') === '1';
@@ -1096,6 +1097,7 @@ async function loadAuthSession() {
     params.delete('auth');
     params.delete('profile');
     hashParams.delete('adminInvite');
+    hashParams.delete('adminUsername');
     hashParams.delete('verify');
     const query = params.toString();
     const hash = hashParams.toString();
@@ -1114,7 +1116,7 @@ async function loadAuthSession() {
     if (response.ok) state.authSession = (await response.json()).session;
   } catch { state.authSession = null; }
   renderAuthHeader();
-  if (adminInviteToken) openAdminInviteCompletion(adminInviteToken);
+  if (adminInviteToken) openAdminInviteCompletion(adminInviteToken, invitedUsername);
   else if (state.authMessageAfterLoad) openAuthModal('login', state.authMessageAfterLoad.message, state.authMessageAfterLoad.kind);
   else if (requestedAuthMode === 'login' || requestedAuthMode === 'register') openAuthModal(requestedAuthMode);
   else if (requestedProfile && state.authSession?.account) void openProfileManager();
@@ -1252,16 +1254,19 @@ async function submitAuthForm(event) {
   }
 }
 
-function openAdminInviteCompletion(token) {
+function openAdminInviteCompletion(token, invitedUsername = '') {
   $('#auth-form').hidden = false;
   $('#webhook-manager').hidden = true;
   $('#profile-manager').hidden = true;
   $('#auth-modal').hidden = false;
   $('#auth-title').textContent = 'Set administrator password';
-  renderAuthMessage('Choose your public username and a unique password of at least 16 characters. Your first and last name are not exposed in public-facing account data.');
+  renderAuthMessage(`${invitedUsername ? `Your assigned public username is @${invitedUsername}. ` : 'Choose your public username. '}Set a unique password of at least 16 characters.`);
   const form = $('#auth-form');
   form.dataset.adminInviteToken = token;
-  form.innerHTML = '<label class="auth-field full">PUBLIC USERNAME<input name="username" autocomplete="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" required><small>3–24 characters: letters, numbers, and underscores.</small></label><label class="auth-field full">NEW PASSWORD (16+ CHARACTERS)<input name="password" type="password" autocomplete="new-password" minlength="16" maxlength="128" required></label><button class="auth-form-submit" type="submit">Activate staff account</button>';
+  const usernameField = invitedUsername
+    ? `<p class="auth-field full">PUBLIC USERNAME · @${escapeHtml(invitedUsername)}<input type="hidden" name="username" value="${escapeHtml(invitedUsername)}"></p>`
+    : '<label class="auth-field full">PUBLIC USERNAME<input name="username" autocomplete="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" required><small>3–24 characters: letters, numbers, and underscores.</small></label>';
+  form.innerHTML = `${usernameField}<label class="auth-field full">NEW PASSWORD (16+ CHARACTERS)<input name="password" type="password" autocomplete="new-password" minlength="16" maxlength="128" required></label><button class="auth-form-submit" type="submit">Activate staff account</button>`;
   form.addEventListener('submit', submitAuthForm, { once: true });
   form.querySelector('input')?.focus();
 }

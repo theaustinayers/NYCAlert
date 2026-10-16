@@ -52,6 +52,22 @@ describe('AccountStore', () => {
     await assert.rejects(store.deleteAdministrator(completed.account.id), /last active administrator/);
   });
 
+  it('reserves an optional admin-invite username and prevents changing it during activation', async () => {
+    const store = new AccountStore(join(testDirectory, 'admin-invite-username'));
+    await store.init();
+    const invitation = await store.inviteAdministrator({
+      firstName: 'Staff', lastName: 'Member', email: 'staff-handle@example.test', username: 'Staff_Handle', role: 'reviewer'
+    });
+    assert.equal(invitation.account.username, 'Staff_Handle');
+    await assert.rejects(store.inviteAdministrator({
+      firstName: 'Other', lastName: 'Staff', email: 'other-staff@example.test', username: 'staff_handle'
+    }), /already taken/);
+    await assert.rejects(store.completeAdminInvitation(invitation.invitationToken, 'Strong-admin-password-123', 'different_handle'), /assigned by the administrator/);
+    const completed = await store.completeAdminInvitation(invitation.invitationToken, 'Strong-admin-password-123');
+    assert.equal(completed.account.username, 'Staff_Handle');
+    assert.equal(completed.account.adminRole, 'reviewer');
+  });
+
   it('persists validated dashboard preferences across account-store reloads', async () => {
     const directory = join(testDirectory, 'dashboard-preferences');
     const store = new AccountStore(directory);

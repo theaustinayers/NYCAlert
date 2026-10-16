@@ -1051,6 +1051,7 @@ export class DashboardServer {
           }
           const firstName = typeof body.firstName === 'string' ? body.firstName.trim().slice(0, 80) : '';
           const lastName = typeof body.lastName === 'string' ? body.lastName.trim().slice(0, 80) : '';
+          const username = typeof body.username === 'string' ? body.username.trim() : '';
           const role = body.role === 'moderator' || body.role === 'reviewer' ? body.role : 'admin';
           if (!firstName || !lastName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             json(response, 400, { error: 'Enter the administrator name and a valid email address.' });
@@ -1060,16 +1061,16 @@ export class DashboardServer {
             json(response, 400, { error: 'That email is reserved for the bootstrap administrator.' });
             return true;
           }
-          const invitation = await this.accounts.inviteAdministrator({ firstName, lastName, email, role });
+          const invitation = await this.accounts.inviteAdministrator({ firstName, lastName, email, ...(username ? { username } : {}), role });
           try {
             const inviteUrl = new URL('/', this.authConfig.publicUrl);
-            inviteUrl.hash = new URLSearchParams({ adminInvite: invitation.invitationToken }).toString();
+            inviteUrl.hash = new URLSearchParams({ adminInvite: invitation.invitationToken, ...(username ? { adminUsername: invitation.account.username } : {}) }).toString();
             await this.authConfig.sendEmail({
               from: 'NYC Alert <noreply@nycalert.ai>',
               to: invitation.account.email,
               subject: 'NYC Alert staff invitation',
-              text: `Hello,\n\nYou have been invited to NYC Alert as a ${role}. Use this one-time link within 24 hours to choose your public username and set your password:\n${inviteUrl}\n\nNever share this link.`,
-              html: `<p>You have been invited to NYC Alert as a <strong>${role}</strong>. Use this one-time link within 24 hours to choose your public username and set your password:</p><p><a href="${escapeMailText(inviteUrl.toString())}">Accept staff invitation</a></p><p>Never share this link.</p>`
+              text: `Hello,\n\nYou have been invited to NYC Alert as a ${role}.${username ? ` Your public username is @${invitation.account.username}.` : ' Choose your public username when activating your account.'} Use this one-time link within 24 hours to set your password:\n${inviteUrl}\n\nNever share this link.`,
+              html: `<p>You have been invited to NYC Alert as a <strong>${role}</strong>.${username ? ` Your public username is <strong>@${escapeMailText(invitation.account.username)}</strong>.` : ' Choose your public username when activating your account.'} Use this one-time link within 24 hours to set your password:</p><p><a href="${escapeMailText(inviteUrl.toString())}">Accept staff invitation</a></p><p>Never share this link.</p>`
             });
           } catch (error) {
             await this.accounts.deleteAdministrator(invitation.account.id);
