@@ -1397,6 +1397,7 @@ function renderAuthForm(mode) {
       <p class="auth-switch">Need an account? <button type="button" data-auth-mode="register">Register</button></p>`;
   }
   form.insertAdjacentHTML('beforeend', '<p class="auth-switch">Missing your verification email? <button type="button" data-resend-verification>Resend verification email</button></p>');
+  form.insertAdjacentHTML('beforeend', '<p class="auth-switch">For account security and moderation, we retain your last 3 successful login dates/IP addresses and up to 200 signed-in community note/vote actions. Only administrators and moderators can view this history.</p>');
   form.querySelector('[data-resend-verification]').addEventListener('click', resendAuthVerification);
   form.querySelector('[data-auth-mode]')?.addEventListener('click', (event) => openAuthModal(event.currentTarget.dataset.authMode));
   form.onsubmit = submitAuthForm;

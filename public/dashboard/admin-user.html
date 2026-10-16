@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>User Details — NYC Alert</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/admin.css">
+  <link rel="stylesheet" href="/admin-user.css">
+  <script src="/admin-user.js" defer></script>
+</head>
+<body class="admin-page">
+  <main class="user-detail-page">
+    <header class="user-detail-heading"><div><span class="admin-eyebrow">NYC ALERT · PRIVATE ACCOUNT REVIEW</span><h1 id="user-title">User details</h1><p>Restricted to administrators and moderators. Do not redistribute private account information.</p></div><a class="admin-secondary" href="/admin">Back to Users</a></header>
+    <p id="user-error" role="alert" hidden></p>
+    <div id="user-content" hidden>
+      <section class="admin-card"><h2>Registration &amp; account details</h2><dl id="user-facts" class="user-facts"></dl></section>
+      <section class="admin-card"><h2>Last 3 successful logins</h2><p class="admin-muted">Times are shown in New York time. Older logins were not recorded.</p><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th scope="col">Date / time</th><th scope="col">IP address</th></tr></thead><tbody id="user-logins"></tbody></table></div></section>
+      <section class="admin-card"><h2>Community activity</h2><p id="history-notice" class="admin-muted"></p><label class="user-history-filter">Show <select id="history-filter"><option value="all">All activity</option><option value="note">Community notes</option><option value="up">Upvotes</option><option value="down">Downvotes</option></select></label><div id="user-history" class="admin-card-list"></div></section>
+    </div>
+  </main>
+</body>
+</html>

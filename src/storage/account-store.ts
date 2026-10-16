@@ -1,6 +1,7 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { isIP } from 'node:net';
 import type { Borough } from '../domain/subscriptions.js';
 import { alertCategories, type AlertCategory } from '../domain/triage.js';
 import { inferWebhookPlatform, type WebhookAudience, type WebhookPlatform, type WebhookTarget } from '../providers/webhook-delivery.js';
@@ -34,6 +35,8 @@ export interface AccountRecord {
   phone: string;
   usageCase: string;
   newsOutlet?: string;
+  recentLogins?: Array<{ at: string; ip: string }>;
+  communityHistory?: AccountCommunityActivity[];
   accountType: AudienceAccountType | 'reviewer';
   isAdmin?: boolean;
   adminRole?: Exclude<AdminRole, 'owner'>;
@@ -52,6 +55,16 @@ export interface AccountRecord {
 }
 export interface PublicAccount { id: string; username: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: AccountRoleName; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhookSummary[]; webhookAccessSuspended: boolean; communityUpdatesSuspended: boolean; dashboardPreferences?: DashboardPreferences; }
 export interface AdminAccount extends PublicAccount { firstName: string; lastName: string; phone: string; usageCase: string; newsOutlet?: string; }
+
+export interface AccountCommunityActivity {
+  kind: 'note' | 'up' | 'down';
+  targetKind: 'incident' | 'live-call';
+  targetId: string;
+  title: string;
+  at: string;
+  message?: string;
+  noteId?: string;
+}
 
 export class EmailVerificationRequiredError extends Error {
   constructor(readonly account: PublicAccount) {
@@ -167,7 +180,7 @@ export class AccountStore {
     }
   }
 
-  async login(emailInput: string, password: string): Promise<{ token: string; account: PublicAccount }> {
+  async login(emailInput: string, password: string, ip = 'unknown'): Promise<{ token: string; account: PublicAccount }> {
     const account = this.accounts.find((item) => item.email === emailInput.trim().toLowerCase());
     if (!account) {
       hashPassword(password, 'nycalert-dummy-salt');
@@ -180,7 +193,31 @@ export class AccountStore {
       throw new Error('Verify your email first. Check your inbox and spam folder.');
     }
     if (account.status !== 'approved') throw new Error('Your account is awaiting administrator approval.');
+    const normalizedIp = ip.replace(/^::ffff:/, '');
+    account.recentLogins = [{ at: new Date().toISOString(), ip: isIP(normalizedIp) ? normalizedIp : 'unknown' }, ...(account.recentLogins ?? [])].slice(0, 3);
+    await this.persist();
     return this.createSession(account);
+  }
+
+  getUserDetails(id: string): (AdminAccount & { recentLogins: Array<{ at: string; ip: string }>; communityHistory: AccountCommunityActivity[] }) | undefined {
+    const account = this.accounts.find((item) => item.id === id && !item.isAdmin);
+    if (!account) return undefined;
+    return {
+      ...this.publicView(account), firstName: account.firstName, lastName: account.lastName,
+      phone: account.phone, usageCase: account.usageCase,
+      ...(account.newsOutlet ? { newsOutlet: account.newsOutlet } : {}),
+      recentLogins: (account.recentLogins ?? []).slice(0, 3).map((item) => ({ ...item })),
+      communityHistory: (account.communityHistory ?? []).slice(0, 200).map((item) => ({ ...item }))
+    };
+  }
+
+  async recordCommunityActivity(accountId: string, activity: Omit<AccountCommunityActivity, 'at'>): Promise<void> {
+    const account = this.accounts.find((item) => item.id === accountId && !item.isAdmin);
+    if (!account) return;
+    account.communityHistory = [{ ...activity, title: activity.title.slice(0, 180),
+      ...(activity.message ? { message: activity.message.slice(0, 500) } : {}), at: new Date().toISOString()
+    }, ...(account.communityHistory ?? [])].slice(0, 200);
+    await this.persist();
   }
 
   createAdminSession(): string {

@@ -1,0 +1,17 @@
+.user-detail-page{max-width:1100px;margin:0 auto;padding:32px 20px;color:#e5edf5}
+.user-detail-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:24px}
+.user-detail-heading h1{margin:8px 0;font-size:30px}
+.user-detail-heading p,.user-detail-page .admin-muted{color:#9baebf;line-height:1.6}
+.user-detail-page [hidden]{display:none!important}
+#user-content{display:grid;gap:20px}
+.user-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.user-facts dt{color:#9baebf;font-size:12px;margin-bottom:5px}
+.user-facts dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.user-history-filter{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+.user-history-filter select{padding:8px;border:1px solid #44576a;border-radius:6px;background:#101b27;color:#e5edf5}
+.user-activity{padding:16px;border:1px solid #35475a;border-radius:8px;background:#101b27}
+.user-activity header{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#9baebf;font-size:12px}
+.user-activity h3,.user-activity p{overflow-wrap:anywhere;white-space:pre-wrap}
+.user-activity a{color:#9ed8ff}
+#user-error{padding:20px;border:1px solid #a04c59;border-radius:8px;color:#ffc0c0}
+@media(max-width:600px){.user-detail-heading{flex-direction:column}.user-facts{grid-template-columns:1fr}}

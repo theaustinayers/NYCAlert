@@ -325,6 +325,11 @@ function renderUsers() {
     const row = $$('[data-user-id]', table).find((item) => item.dataset.userId === user.id);
     row?.querySelector('td:nth-child(2)')?.insertAdjacentHTML('beforeend', `<small><br>News Outlet / Publication: ${escapeHtml(user.newsOutlet || 'Not provided')}</small>`);
   }
+  if (state.isAdmin || state.session?.role === 'moderator') {
+    for (const row of $$('[data-user-id]', table)) {
+      row.querySelector('.admin-row-actions')?.insertAdjacentHTML('afterbegin', `<a class="admin-icon-button" href="/admin/user?id=${encodeURIComponent(row.dataset.userId)}" target="_blank" rel="noopener noreferrer">View User</a>`);
+    }
+  }
   if (state.isAdmin) {
     for (const user of users.filter((item) => !item.emailVerified && item.status === 'pending-verification')) {
       const row = $$('[data-user-id]', table).find((item) => item.dataset.userId === user.id);

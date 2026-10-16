@@ -56,6 +56,8 @@ const staticFiles = new Map<string, [string, string]>([
   ['/admin.css', ['admin.css', 'text/css; charset=utf-8']],
   ['/admin-learning.css', ['admin-learning.css', 'text/css; charset=utf-8']],
   ['/admin.js', ['admin.js', 'text/javascript; charset=utf-8']],
+  ['/admin-user.js', ['admin-user.js', 'text/javascript; charset=utf-8']],
+  ['/admin-user.css', ['admin-user.css', 'text/css; charset=utf-8']],
   ['/admin', ['admin.html', 'text/html; charset=utf-8']],
   ['/mdt', ['mdt.html', 'text/html; charset=utf-8']],
   ['/leaflet.css', ['../../node_modules/leaflet/dist/leaflet.css', 'text/css; charset=utf-8']],
@@ -396,6 +398,17 @@ export class DashboardServer {
           return;
         }
 
+        if (url.pathname === '/admin/user') {
+          const session = this.accounts?.getSession(this.readSessionToken(request));
+          if (session?.kind !== 'admin' || !['owner', 'admin', 'moderator'].includes(session.role)) {
+            json(response, session?.kind === 'admin' ? 403 : 401, { error: 'Administrator or moderator access required.' });
+            return;
+          }
+          response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' });
+          if (request.method === 'HEAD') response.end();
+          else response.end(await readFile(join(root, 'admin-user.html'), 'utf8'));
+          return;
+        }
         const file = staticFiles.get(url.pathname);
         if (!file) {
           response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -527,6 +540,10 @@ export class DashboardServer {
           json(response, 404, { error: 'Incident not found.' });
           return true;
         }
+        if (session.account) await this.recordUserActivity(session.account.id, {
+          kind: 'note', targetKind: 'incident', targetId: communityNoteMatch[1]!,
+          title: this.store.getIncident(communityNoteMatch[1]!)?.title ?? 'Incident', message: note.message, noteId: note.id
+        });
         logger.info({ action: 'community-incident-note-created', incidentId: communityNoteMatch[1], accountId: session.account?.id, noteId: note.id, audience: userAudience, role: staffRole }, 'Community note added to incident');
         json(response, 201, { note });
       } catch (error) {
@@ -765,7 +782,7 @@ export class DashboardServer {
             return true;
           }
           try {
-            const loggedIn = await this.accounts.login(email, password);
+            const loggedIn = await this.accounts.login(email, password, this.clientIp(request));
             this.setSessionCookie(response, loggedIn.token);
             json(response, 200, { session: loggedIn.account.isAdmin
               ? { kind: 'admin', account: loggedIn.account }
@@ -816,6 +833,16 @@ export class DashboardServer {
       const role = adminSession.role;
       const isAdmin = role === 'owner' || role === 'admin';
       const canModerate = isAdmin || role === 'moderator';
+      const userDetailMatch = /^\/api\/admin\/accounts\/([a-f0-9]{32})\/details$/i.exec(url.pathname);
+      if (userDetailMatch) {
+        if (!canModerate) { json(response, 403, { error: 'Only administrators and moderators can view user details.' }); return true; }
+        if (request.method !== 'GET') { json(response, 405, { error: 'Method not allowed.' }); return true; }
+        const account = this.accounts.getUserDetails(userDetailMatch[1]!);
+        if (!account) { json(response, 404, { error: 'User not found.' }); return true; }
+        logger.info({ action: 'user-details-viewed', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id }, 'Staff viewed private user details');
+        json(response, 200, { account, historyLimit: 200, historyNotice: 'Login and activity tracking starts with this feature. Older activity is not backfilled. Anonymous votes cannot be attributed. Note history records submissions; a note or its target may since have been removed.' });
+        return true;
+      }
       const mutating = request.method === 'POST' || request.method === 'PUT' || request.method === 'PATCH' || request.method === 'DELETE';
       const adminOnlyPath = url.pathname.startsWith('/api/admin/administrators')
         || url.pathname.startsWith('/api/admin/webhooks')
@@ -1319,6 +1346,8 @@ export class DashboardServer {
       }
       const result = this.incidentVotes.castVote(incident, deviceId, body.vote);
       if (result.accepted) {
+        const session = this.accounts?.getSession(this.readSessionToken(request));
+        if (session?.account) await this.recordUserActivity(session.account.id, { kind: body.vote, targetKind: 'incident', targetId: incident.id, title: incident.title });
         if (body.vote === 'up') this.broadcastCommunityUpvote({ kind: 'incident', id: incident.id, title: incident.title, agency: incident.agency, borough: incident.borough });
         this.learningLog?.recordIncidentFeedback({
           incidentId: incident.id,
@@ -1393,6 +1422,10 @@ export class DashboardServer {
         return;
       }
       const result = this.incidentVotes.castLiveCallVote(call, deviceId, body.vote);
+      if (result.accepted) {
+        const session = this.accounts?.getSession(this.readSessionToken(request));
+        if (session?.account) await this.recordUserActivity(session.account.id, { kind: body.vote, targetKind: 'live-call', targetId: call.id, title: call.headline || `${call.agency} radio report` });
+      }
       if (result.accepted && body.vote === 'up') this.broadcastCommunityUpvote({
         kind: 'live-call', id: call.id, title: call.headline || `${call.agency} radio report`, agency: call.agency, borough: call.borough
       });
@@ -1468,12 +1501,21 @@ export class DashboardServer {
     }
   }
 
-  private takeRateLimit(request: IncomingMessage, action: string, maximum: number, windowMs: number, scope: 'ip' | 'global' = 'ip'): boolean {
-    const now = Date.now();
+  private async recordUserActivity(accountId: string, activity: Parameters<AccountStore['recordCommunityActivity']>[1]): Promise<void> {
+    try { await this.accounts?.recordCommunityActivity(accountId, activity); }
+    catch { logger.error({ action: 'user-activity-history-write-failed' }, 'Could not persist user activity history'); }
+  }
+
+  private clientIp(request: IncomingMessage): string {
     const forwardedFor = this.authConfig?.trustProxy
       ? headerValue(request.headers['x-forwarded-for']).split(',').at(-1)?.trim()
       : undefined;
-    const ip = forwardedFor || request.socket.remoteAddress || 'unknown';
+    return forwardedFor || request.socket.remoteAddress || 'unknown';
+  }
+
+  private takeRateLimit(request: IncomingMessage, action: string, maximum: number, windowMs: number, scope: 'ip' | 'global' = 'ip'): boolean {
+    const now = Date.now();
+    const ip = this.clientIp(request);
     const key = scope === 'global' ? action : `${action}:${ip}`;
     const current = this.authRateLimits.get(key);
     if (!current || current.resetsAt <= now) {

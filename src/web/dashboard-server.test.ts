@@ -24,6 +24,63 @@ async function availablePort(): Promise<number> {
 }
 
 describe('DashboardServer account routes', () => {
+  it('restricts user details to admins/mods and records only authenticated accepted activity and successful logins', async () => {
+    const directory = join(testDirectory, 'user-details');
+    const accounts = new AccountStore(directory);
+    await accounts.init();
+    const registered = await accounts.register({ username: 'detail_user', firstName: 'Private', lastName: 'Person', email: 'detail@example.test', phone: '2125550100', usageCase: 'Testing private user detail pages.', accountType: 'buff', password: 'Strong-test-password-123' });
+    await accounts.verifyEmail(registered.verificationToken);
+    await accounts.updateAccount(registered.account.id, { status: 'approved' });
+    const staff: Record<string, string> = {};
+    for (const role of ['admin', 'moderator', 'reviewer'] as const) {
+      const invited = await accounts.inviteAdministrator({ firstName: role, lastName: 'Test', email: `${role}-detail@example.test`, role });
+      const completed = await accounts.completeAdminInvitation(invited.invitationToken, 'Strong-staff-password-123', `detail_${role}`);
+      staff[role] = `nycalert_session=${completed.token}`;
+    }
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const store = new DashboardStore(false);
+    const incident = await store.publish({ title: 'Fire', summary: 'Synthetic report', occurredAt: new Date(), agency: 'FDNY', borough: 'Queens', category: 'newsworthy', confidence: 0.9, newsworthinessScore: 4 });
+    const call = await store.recordLiveCall({ sourceId: 'detail-call', transcript: '', summary: 'Synthetic report', occurredAt: new Date(), agency: 'FDNY', borough: 'Queens', category: 'newsworthy', confidence: 0.9, newsworthinessScore: 3 });
+    const votes = new IncidentVoteStore(directory);
+    await votes.init();
+    const server = new DashboardServer(store, port, '127.0.0.1', undefined, accounts, { publicUrl: origin, trustProxy: false }, undefined, undefined, undefined, undefined, votes);
+    await server.start();
+    const endpoint = `/api/admin/accounts/${registered.account.id}/details`;
+    const page = `/admin/user?id=${registered.account.id}`;
+    const post = (path: string, body: unknown, cookie = '') => fetch(`${origin}${path}`, { method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.99' }, body: JSON.stringify(body) });
+    try {
+      assert.equal((await fetch(`${origin}${endpoint}`)).status, 401);
+      assert.equal((await fetch(`${origin}${page}`)).status, 401);
+      const login = await post('/api/auth/login', { email: registered.account.email, password: 'Strong-test-password-123' });
+      assert.equal(login.status, 200);
+      const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+      assert.equal((await fetch(`${origin}${endpoint}`, { headers: { Cookie: cookie } })).status, 401);
+      for (const path of [endpoint, page]) {
+        assert.equal((await fetch(`${origin}${path}`, { headers: { Cookie: staff.reviewer! } })).status, 403);
+        for (const role of ['admin', 'moderator']) assert.equal((await fetch(`${origin}${path}`, { headers: { Cookie: staff[role]! } })).status, 200);
+      }
+      const deviceId = '00000000-0000-4000-8000-000000000123';
+      await post(`/api/incidents/${incident.id}/vote`, { deviceId, vote: 'up', accountId: 'spoofed' }, cookie);
+      await post(`/api/incidents/${incident.id}/vote`, { deviceId, vote: 'down' }, cookie);
+      await post(`/api/live-calls/${call.id}/vote`, { deviceId, vote: 'down' }, cookie);
+      await post(`/api/incidents/${incident.id}/vote`, { deviceId: '00000000-0000-4000-8000-000000000124', vote: 'down' });
+      await post(`/api/account/incidents/${incident.id}/community-notes`, { message: '<b>Synthetic note</b>', accountId: 'spoofed' }, cookie);
+      await accounts.updateUsername(registered.account.id, 'renamed_detail');
+      const response = await fetch(`${origin}${endpoint}`, { headers: { Cookie: staff.moderator! } });
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      const data = await response.json() as { account: { username: string; recentLogins: Array<{ ip: string }>; communityHistory: Array<{ kind: string }> } };
+      assert.equal(data.account.username, 'renamed_detail');
+      assert.deepEqual(data.account.communityHistory.map((item) => item.kind), ['note', 'down', 'up']);
+      assert.equal(data.account.recentLogins[0]?.ip, '127.0.0.1', 'ignore forwarded IPs when trustProxy is false');
+      assert.doesNotMatch(JSON.stringify(data), /passwordHash|passwordSalt|verificationToken|device_hash/);
+      assert.equal((await fetch(`${origin}/api/admin/accounts/${'f'.repeat(32)}/details`, { headers: { Cookie: staff.admin! } })).status, 404);
+      const reopened = new AccountStore(directory);
+      await reopened.init();
+      assert.equal(reopened.getUserDetails(registered.account.id)?.communityHistory.length, 3);
+    } finally { await server.stop(); votes.close(); }
+  });
+
   it('saves every incident editor field through the authenticated API and rejects invalid edits', async () => {
     const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;
@@ -278,13 +335,13 @@ describe('DashboardServer account routes', () => {
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
-      assert.match(html, /\/admin\.js\?v=news-outlet-registration-20261016-1/);
+      assert.match(html, /\/admin\.js\?v=user-detail-review-20261016-1/);
       assert.match(html, /id="update-website"/);
       const wordmark = await fetch(`${origin}/nyc-alert-wordmark.svg`);
       assert.equal(wordmark.status, 200);
       assert.match(wordmark.headers.get('content-type') ?? '', /image\/svg\+xml/);
       assert.match(await wordmark.text(), /NYC Alert/);
-      const script = await fetch(`${origin}/admin.js?v=news-outlet-registration-20261016-1`);
+      const script = await fetch(`${origin}/admin.js?v=user-detail-review-20261016-1`);
       assert.equal(script.status, 200);
       assert.equal(script.headers.get('cache-control'), 'no-store');
       const adminScript = await script.text();
@@ -541,10 +598,11 @@ describe('DashboardServer account routes', () => {
       assert.equal(anonymous.status, 401);
 
       const login = await fetch(`${origin}/api/auth/login`, {
-        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', 'X-Forwarded-For': '192.0.2.111, 198.51.100.25' },
         body: JSON.stringify({ email: verified.email, password: 'Strong-test-password-123' })
       });
       assert.equal(login.status, 200);
+      assert.equal(accounts.getUserDetails(verified.id)?.recentLogins[0]?.ip, '198.51.100.25', 'use the final forwarded address only when the proxy is trusted');
       const cookie = login.headers.get('set-cookie')?.split(';')[0];
       assert.ok(cookie);
 

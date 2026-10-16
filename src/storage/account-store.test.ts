@@ -9,6 +9,33 @@ const testDirectory = await mkdtemp(join(tmpdir(), 'nyc-accounts-'));
 after(async () => rm(testDirectory, { recursive: true, force: true }));
 
 describe('AccountStore', () => {
+  it('bounds private login/activity history, persists it and excludes it from public views', async () => {
+    const directory = join(testDirectory, 'private-user-history');
+    const store = new AccountStore(directory);
+    await store.init();
+    const registered = await store.register({ username: 'history_user', firstName: 'Private', lastName: 'Person', email: 'history@example.test', phone: '2125550100', usageCase: 'Testing private account history.', accountType: 'news', newsOutlet: 'Example Daily', password: 'Strong-test-password-123' });
+    assert.deepEqual(store.getUserDetails(registered.account.id)?.recentLogins, []);
+    await assert.rejects(store.login(registered.account.email, 'wrong', '192.0.2.100'));
+    await store.verifyEmail(registered.verificationToken);
+    await store.updateAccount(registered.account.id, { status: 'approved' });
+    for (let i = 1; i <= 4; i++) await store.login(registered.account.email, 'Strong-test-password-123', `::ffff:192.0.2.${i}`);
+    for (let i = 0; i < 202; i++) await store.recordCommunityActivity(registered.account.id, {
+      kind: i % 2 ? 'up' : 'note', targetKind: 'incident', targetId: 'synthetic', title: `Report ${i}`, ...(i % 2 ? {} : { message: 'Synthetic note' })
+    });
+    const reopened = new AccountStore(directory);
+    await reopened.init();
+    const detail = reopened.getUserDetails(registered.account.id)!;
+    assert.deepEqual(detail.recentLogins.map((login) => login.ip), ['192.0.2.4', '192.0.2.3', '192.0.2.2']);
+    assert.equal(detail.communityHistory.length, 200);
+    assert.equal(detail.communityHistory[0]?.title, 'Report 201');
+    assert.equal(detail.newsOutlet, 'Example Daily');
+    assert.doesNotMatch(JSON.stringify(detail), /passwordHash|passwordSalt|verificationToken|verificationExpiresAt/);
+    assert.doesNotMatch(JSON.stringify(reopened.listAccounts()), /recentLogins|communityHistory|192\.0\.2/);
+    assert.doesNotMatch(JSON.stringify(reopened.listAdminAccounts()), /recentLogins|communityHistory|192\.0\.2/);
+    await reopened.deleteAccount(detail.id);
+    assert.equal(reopened.getUserDetails(detail.id), undefined);
+  });
+
   it('renews verification links with durable cooldowns, single use, and delivery-failure recovery', async () => {
     const directory = join(testDirectory, 'resend-verification');
     const store = new AccountStore(directory);
