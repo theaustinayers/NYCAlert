@@ -37,7 +37,6 @@ const state = {
   following: true
 };
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-    visible = entries.filter((entry) => entry.incidentId === state.dispatchIncidentId && entry.kind !== 'update');
 function updateClock() {
   $('#mdt-clock').textContent = `${new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())} ET`;
 }
