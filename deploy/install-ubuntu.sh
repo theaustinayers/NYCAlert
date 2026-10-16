@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Installs the app, Node.js 22, loopback-only Postfix mail, CPU whisper.cpp + English base model, and a systemd unit.
+# Installs the app, Node.js 22, PHP mail() with loopback-only Postfix, CPU whisper.cpp + English base model, and a systemd unit.
 # Run from the project root: sudo bash deploy/install-ubuntu.sh
 
 APP_DIR="${APP_DIR:-/opt/nyc-alert-bot}"
@@ -27,7 +27,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 printf '%s\n' 'postfix postfix/main_mailer_type select Internet Site' 'postfix postfix/mailname string nycalert.ai' | debconf-set-selections
 apt-get update
-apt-get install -y ca-certificates curl cmake build-essential git gnupg wget rsync pkg-config ffmpeg postfix opendkim opendkim-tools openssh-client jq
+apt-get install -y ca-certificates curl cmake build-essential git gnupg wget rsync pkg-config ffmpeg php-cli postfix opendkim opendkim-tools openssh-client jq
 if [[ -f /etc/postfix/main.cf ]]; then
   cp -a /etc/postfix/main.cf "/etc/postfix/main.cf.nycalert.bak.$(date +%Y%m%d%H%M%S)"
 fi
@@ -131,25 +131,6 @@ chown -R "${SERVICE_USER}:${SERVICE_USER}" "${APP_DIR}/dist"
 if [[ ! -e "${ENV_FILE}" ]]; then
   install -m 0600 .env.example "${ENV_FILE}"
   chown root:root "${ENV_FILE}"
-fi
-if ! grep -q '^SMTP_HOST=.' "${ENV_FILE}"; then
-  if grep -q '^SMTP_HOST=' "${ENV_FILE}"; then
-    sed -i 's|^SMTP_HOST=.*|SMTP_HOST=127.0.0.1|' "${ENV_FILE}"
-  else
-    printf '\nSMTP_HOST=127.0.0.1\n' >> "${ENV_FILE}"
-  fi
-  if grep -q '^SMTP_PORT=' "${ENV_FILE}"; then
-    sed -i 's|^SMTP_PORT=.*|SMTP_PORT=25|' "${ENV_FILE}"
-  else
-    printf 'SMTP_PORT=25\n' >> "${ENV_FILE}"
-  fi
-fi
-if ! grep -q '^SMTP_FROM=.' "${ENV_FILE}" || grep -q '^SMTP_FROM=noreply@nycalert\.ai$' "${ENV_FILE}"; then
-  if grep -q '^SMTP_FROM=' "${ENV_FILE}"; then
-    sed -i 's|^SMTP_FROM=.*|SMTP_FROM="NYC Alert <noreply@nycalert.ai>"|' "${ENV_FILE}"
-  else
-    printf 'SMTP_FROM="NYC Alert <noreply@nycalert.ai>"\n' >> "${ENV_FILE}"
-  fi
 fi
 # The systemd unit is write-restricted; keep subscriptions in its writable state directory.
 if grep -q '^DATA_DIR=\./data$' "${ENV_FILE}" || ! grep -q '^DATA_DIR=' "${ENV_FILE}"; then
@@ -274,10 +255,9 @@ Next steps:
       and approved Broadcastify JWT values: API Key ID, application ID as ISSUER, and API Key as SECRET.
       3. Configure ADMIN_EMAIL and ADMIN_PASSWORD, and publish the DKIM TXT record from:
            /etc/opendkim/keys/nycalert.ai/nyc-alert.txt
-         Also publish SPF and DMARC for your sending host. Postfix accepts mail from the app only
-         on loopback and attempts direct outbound delivery;
-        your provider must allow outbound TCP 25. You may set SMTP_HOST/PORT/USERNAME/PASSWORD to
-        use a managed SMTP relay instead. The From address defaults to noreply@nycalert.ai.
+           Also publish SPF and DMARC for your sending host. PHP mail() submits through local Postfix;
+           your provider must allow outbound TCP 25 for direct delivery. Email uses
+           NYC Alert <noreply@nycalert.ai> as its sender.
       4. Keep Broadcastify audio/feed processing disabled until its documented audio retrieval
      behavior is implemented and confirmed to permit transcription.
       5. Start at boot and launch the service with:

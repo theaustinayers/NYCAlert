@@ -26,12 +26,6 @@ const schema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   ADMIN_EMAIL: optionalText(z.string().email()),
   ADMIN_PASSWORD: optionalText(z.string().min(16)),
-  SMTP_HOST: z.preprocess((value) => value === '' ? undefined : value, z.string().min(1).default('127.0.0.1')),
-  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(25),
-  SMTP_SECURE: z.string().default('false'),
-  SMTP_USERNAME: optionalText(z.string().min(1)),
-  SMTP_PASSWORD: optionalText(z.string().min(1)),
-  SMTP_FROM: z.string().min(1).default('NYC Alert <noreply@nycalert.ai>'),
   WHISPER_CPP_PATH: z.string().default('/opt/whisper.cpp/build/bin/whisper-cli'),
   WHISPER_MODEL_PATH: z.string().default('/opt/whisper.cpp/models/ggml-base.en.bin'),
   WHISPER_THREADS: z.coerce.number().int().min(1).max(64).default(2),
@@ -73,9 +67,6 @@ if (!parsed.success) {
 }
 if (Boolean(parsed.data.ADMIN_EMAIL) !== Boolean(parsed.data.ADMIN_PASSWORD)) {
   throw new Error('Configure both ADMIN_EMAIL and ADMIN_PASSWORD to enable the administrator dashboard.');
-}
-if (Boolean(parsed.data.SMTP_USERNAME) !== Boolean(parsed.data.SMTP_PASSWORD)) {
-  throw new Error('Configure both SMTP_USERNAME and SMTP_PASSWORD, or leave both empty.');
 }
 if (parsed.data.X_AUTO_POST_ENABLED === 'true' && !parsed.data.X_USER_ACCESS_TOKEN) {
   const oauth1 = [parsed.data.X_OAUTH_CONSUMER_KEY, parsed.data.X_OAUTH_CONSUMER_SECRET, parsed.data.X_OAUTH_ACCESS_TOKEN, parsed.data.X_OAUTH_ACCESS_TOKEN_SECRET];
@@ -123,12 +114,6 @@ export const config = {
   openAiApiKey: parsed.data.OPENAI_API_KEY,
   adminEmail: parsed.data.ADMIN_EMAIL?.toLowerCase(),
   adminPassword: parsed.data.ADMIN_PASSWORD,
-  smtpHost: parsed.data.SMTP_HOST,
-  smtpPort: parsed.data.SMTP_PORT,
-  smtpSecure: parsed.data.SMTP_SECURE === 'true',
-  smtpUsername: parsed.data.SMTP_USERNAME,
-  smtpPassword: parsed.data.SMTP_PASSWORD,
-  smtpFrom: parsed.data.SMTP_FROM,
   whisperExecutablePath: parsed.data.WHISPER_CPP_PATH,
   whisperModelPath: parsed.data.WHISPER_MODEL_PATH,
   whisperThreads: parsed.data.WHISPER_THREADS,

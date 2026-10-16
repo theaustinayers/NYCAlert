@@ -3,7 +3,7 @@ import { createHash, randomBytes, timingSafeEqual, randomUUID } from 'node:crypt
 import { readFile, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
-import { createTransport } from 'nodemailer';
+import type { EmailMessage } from '../providers/php-mail.js';
 import { isAgency, isBorough, type Agency, type Borough } from '../domain/subscriptions.js';
 import { isCallType } from '../domain/call-type.js';
 import { dashboardFeedLinks } from '../providers/broadcastify-catalog.js';
@@ -24,12 +24,7 @@ export interface DashboardAuthConfig {
   trustProxy: boolean;
   adminEmail?: string;
   adminPassword?: string;
-  smtpHost?: string;
-  smtpPort: number;
-  smtpSecure: boolean;
-  smtpUsername?: string;
-  smtpPassword?: string;
-  smtpFrom: string;
+  sendEmail?: (message: EmailMessage) => Promise<void>;
 }
 
 const sessionCookie = 'nycalert_session';
@@ -670,8 +665,8 @@ export class DashboardServer {
           return true;
         }
         if (action === 'register') {
-          if (!this.authConfig.smtpHost) {
-            json(response, 503, { error: 'Registration is temporarily unavailable because email verification is not configured.' });
+          if (!this.authConfig.sendEmail) {
+            json(response, 503, { error: 'Registration is temporarily unavailable because PHP email delivery is not configured.' });
             return true;
           }
           const input = validateRegistration(body);
@@ -680,16 +675,8 @@ export class DashboardServer {
           try {
             const verifyUrl = new URL('/', this.authConfig.publicUrl);
             verifyUrl.hash = new URLSearchParams({ verify: registered.verificationToken }).toString();
-            const transport = createTransport({
-              host: this.authConfig.smtpHost,
-              port: this.authConfig.smtpPort,
-              secure: this.authConfig.smtpSecure,
-              ...(this.authConfig.smtpUsername && this.authConfig.smtpPassword
-                ? { auth: { user: this.authConfig.smtpUsername, pass: this.authConfig.smtpPassword } }
-                : {})
-            });
-            await transport.sendMail({
-              from: this.authConfig.smtpFrom,
+            await this.authConfig.sendEmail({
+              from: 'NYC Alert <noreply@nycalert.ai>',
               to: registered.account.email,
               subject: 'Verify your NYC Alert account',
               text: verificationEmailText(registered.account.username, registered.account.accountType, verifyUrl.toString()),
@@ -698,7 +685,7 @@ export class DashboardServer {
           } catch (error) {
             await this.accounts.deleteAccount(registered.account.id);
             logger.error({ error }, 'Could not send account verification email');
-            json(response, 503, { error: 'Verification email could not be sent. Check your details or try again later.' });
+            json(response, 503, { error: 'Verification email could not be sent. Please check back later.' });
             return true;
           }
           json(response, 201, { message: 'Check your email for a verification link. After verifying, an administrator must approve the account.' });
@@ -1050,8 +1037,8 @@ export class DashboardServer {
           json(response, 429, { error: 'Administrator invitations are temporarily rate-limited.' });
           return true;
         }
-        if (!this.authConfig.smtpHost) {
-          json(response, 503, { error: 'Administrator invitations require configured email delivery.' });
+        if (!this.authConfig.sendEmail) {
+          json(response, 503, { error: 'Administrator invitations require configured PHP email delivery.' });
           return true;
         }
         try {
@@ -1077,16 +1064,8 @@ export class DashboardServer {
           try {
             const inviteUrl = new URL('/', this.authConfig.publicUrl);
             inviteUrl.hash = new URLSearchParams({ adminInvite: invitation.invitationToken }).toString();
-            const transport = createTransport({
-              host: this.authConfig.smtpHost,
-              port: this.authConfig.smtpPort,
-              secure: this.authConfig.smtpSecure,
-              ...(this.authConfig.smtpUsername && this.authConfig.smtpPassword
-                ? { auth: { user: this.authConfig.smtpUsername, pass: this.authConfig.smtpPassword } }
-                : {})
-            });
-            await transport.sendMail({
-              from: this.authConfig.smtpFrom,
+            await this.authConfig.sendEmail({
+              from: 'NYC Alert <noreply@nycalert.ai>',
               to: invitation.account.email,
               subject: 'NYC Alert staff invitation',
               text: `Hello,\n\nYou have been invited to NYC Alert as a ${role}. Use this one-time link within 24 hours to choose your public username and set your password:\n${inviteUrl}\n\nNever share this link.`,
@@ -1095,7 +1074,7 @@ export class DashboardServer {
           } catch (error) {
             await this.accounts.deleteAdministrator(invitation.account.id);
             logger.error({ error }, 'Could not send administrator invitation email');
-            json(response, 503, { error: 'Invitation email could not be sent. Check SMTP settings and try again.' });
+            json(response, 503, { error: 'Invitation email could not be sent. Please check back later.' });
             return true;
           }
           logger.info({ action: 'admin-invited', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: invitation.account.id }, 'Administrator invitation sent');

@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { once } from 'node:events';
-import { createServer as createNetServer } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,49 +13,6 @@ import { DashboardServer } from './dashboard-server.js';
 
 const testDirectory = await mkdtemp(join(tmpdir(), 'nyc-dashboard-server-'));
 after(async () => rm(testDirectory, { recursive: true, force: true }));
-
-async function smtpTestServer(): Promise<{ port: number; messages: string[]; close: () => Promise<void> }> {
-  const messages: string[] = [];
-  const server = createNetServer((socket) => {
-    socket.setEncoding('utf8');
-    socket.write('220 localhost ESMTP ready\r\n');
-    let input = '';
-    let readingData = false;
-    let currentMessage = '';
-    socket.on('data', (chunk) => {
-      input += chunk;
-      for (;;) {
-        const end = input.indexOf('\r\n');
-        if (end < 0) break;
-        const line = input.slice(0, end);
-        input = input.slice(end + 2);
-        if (readingData) {
-          if (line === '.') {
-            messages.push(currentMessage);
-            currentMessage = '';
-            readingData = false;
-            socket.write('250 queued\r\n');
-          } else currentMessage += `${line}\n`;
-          continue;
-        }
-        if (/^EHLO|^HELO/i.test(line)) socket.write('250-localhost\r\n250 8BITMIME\r\n');
-        else if (/^MAIL FROM|^RCPT TO/i.test(line)) socket.write('250 OK\r\n');
-        else if (/^DATA/i.test(line)) { readingData = true; socket.write('354 end with dot\r\n'); }
-        else if (/^QUIT/i.test(line)) socket.end('221 bye\r\n');
-        else socket.write('250 OK\r\n');
-      }
-    });
-  });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Could not start SMTP test server.');
-  return {
-    port: address.port,
-    messages,
-    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
-  };
-}
 
 async function availablePort(): Promise<number> {
   const probe = createServer();
@@ -274,10 +229,7 @@ describe('DashboardServer account routes', () => {
       publicUrl: origin,
       trustProxy: true,
       adminEmail: 'admin@example.test',
-      adminPassword: 'test-admin-password-long',
-      smtpPort: 587,
-      smtpSecure: false,
-      smtpFrom: 'noreply@example.test'
+      adminPassword: 'test-admin-password-long'
     });
     await server.start();
     try {
@@ -325,11 +277,11 @@ describe('DashboardServer account routes', () => {
       assert.deepEqual((await listed.json() as { accounts: unknown[] }).accounts, []);
       const updateNotInstalled = await fetch(`${origin}/api/admin/deployment-update`, { headers: { Cookie: cookie } });
       assert.equal(updateNotInstalled.status, 503);
-      const smtpRequired = await fetch(`${origin}/api/admin/administrators/invite`, {
+      const mailRequired = await fetch(`${origin}/api/admin/administrators/invite`, {
         method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
         body: JSON.stringify({ firstName: 'New', lastName: 'Admin', email: 'new-admin@example.test' })
       });
-      assert.equal(smtpRequired.status, 503);
+      assert.equal(mailRequired.status, 503);
 
       const deniedInternalHook = await fetch(`${origin}/api/admin/webhooks`, {
         method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
@@ -354,7 +306,7 @@ describe('DashboardServer account routes', () => {
     const verified = await accounts.verifyEmail(registered.verificationToken);
     await accounts.updateAccount(verified.id, { status: 'approved' });
     const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
-      publicUrl: origin, trustProxy: true, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+      publicUrl: origin, trustProxy: true
     });
     await server.start();
     try {
@@ -401,7 +353,7 @@ describe('DashboardServer account routes', () => {
     const verified = await accounts.verifyEmail(registered.verificationToken);
     await accounts.updateAccount(verified.id, { status: 'approved' });
     const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
-      publicUrl: origin, trustProxy: true, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+      publicUrl: origin, trustProxy: true
     });
     await server.start();
     try {
@@ -455,7 +407,6 @@ describe('DashboardServer account routes', () => {
     const initialUpdatedAt = incident.updatedAt;
     const server = new DashboardServer(store, port, '127.0.0.1', undefined, accounts, {
       publicUrl: origin, trustProxy: true, adminEmail: 'community-admin@example.test', adminPassword: 'community-admin-password-long',
-      smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
     });
     await server.start();
     try {
@@ -529,8 +480,7 @@ describe('DashboardServer account routes', () => {
     const verified = await accounts.verifyEmail(registered.verificationToken);
     await accounts.updateAccount(verified.id, { status: 'approved' });
     const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
-      publicUrl: origin, trustProxy: true, adminEmail: 'admin-webhooks@example.test', adminPassword: 'test-admin-password-long',
-      smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+      publicUrl: origin, trustProxy: true, adminEmail: 'admin-webhooks@example.test', adminPassword: 'test-admin-password-long'
     });
     await server.start();
     try {
@@ -607,7 +557,7 @@ describe('DashboardServer account routes', () => {
       await accounts.updateAccount(verified.id, { status: 'approved' });
     }
     const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
-      publicUrl: origin, trustProxy: true, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+      publicUrl: origin, trustProxy: true
     });
     await server.start();
     try {
@@ -655,10 +605,7 @@ describe('DashboardServer account routes', () => {
       publicUrl: origin,
       trustProxy: false,
       adminEmail: 'x-admin@example.test',
-      adminPassword: 'test-x-admin-password',
-      smtpPort: 587,
-      smtpSecure: false,
-      smtpFrom: 'noreply@example.test'
+      adminPassword: 'test-x-admin-password'
     }, undefined, undefined, undefined, xTester);
     await server.start();
     try {
@@ -697,18 +644,15 @@ describe('DashboardServer account routes', () => {
     } finally { await server.stop(); }
   });
 
-  it('sends the branded HTML verification email with NYC Alert sender identity', async () => {
-    const smtp = await smtpTestServer();
+  it('sends the branded verification email through the configured PHP mail provider', async () => {
     const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;
-    const accounts = new AccountStore(join(testDirectory, 'smtp-auth'));
+    const accounts = new AccountStore(join(testDirectory, 'php-mail-auth'));
+    const sentEmails: Array<{ to: string; from: string; subject: string; text: string; html: string }> = [];
     const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
       publicUrl: origin,
       trustProxy: false,
-      smtpHost: '127.0.0.1',
-      smtpPort: smtp.port,
-      smtpSecure: false,
-      smtpFrom: 'NYC Alert <noreply@nycalert.ai>'
+      sendEmail: async (message) => { sentEmails.push(message); }
     });
     await server.start();
     try {
@@ -721,16 +665,16 @@ describe('DashboardServer account routes', () => {
         })
       });
       assert.equal(response.status, 201);
-      assert.equal(smtp.messages.length, 1);
-      assert.match(smtp.messages[0]!, /From: NYC Alert <noreply@nycalert\.ai>/);
-      assert.match(smtp.messages[0]!, /NYC ALERT \| VERIFY YOUR EMAIL/);
-      assert.match(smtp.messages[0]!, /text\/html/);
-      assert.match(smtp.messages[0]!, /Confirm your email/);
-      assert.match(smtp.messages[0]!, /expires in 24 hours/);
-      assert.match(smtp.messages[0]!, /Hello taylor_public/);
+      assert.equal(sentEmails.length, 1);
+      assert.equal(sentEmails[0]?.to, 'taylor@example.test');
+      assert.equal(sentEmails[0]?.from, 'NYC Alert <noreply@nycalert.ai>');
+      assert.equal(sentEmails[0]?.subject, 'Verify your NYC Alert account');
+      assert.match(sentEmails[0]?.text ?? '', /NYC ALERT \| VERIFY YOUR EMAIL/);
+      assert.match(sentEmails[0]?.text ?? '', /expires in 24 hours/);
+      assert.match(sentEmails[0]?.html ?? '', /Confirm your email/);
+      assert.match(sentEmails[0]?.html ?? '', /Hello taylor_public/);
     } finally {
       await server.stop();
-      await smtp.close();
     }
   });
 
@@ -784,8 +728,7 @@ describe('DashboardServer account routes', () => {
       transcript: 'Test transcript for admin export.', transcriptCharacters: 33, transcriptSource: 'local-whisper'
     });
     const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accountStore, {
-      publicUrl: origin, trustProxy: false, adminEmail: 'learning-admin@example.test', adminPassword: 'test-learning-admin-password',
-      smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+      publicUrl: origin, trustProxy: false, adminEmail: 'learning-admin@example.test', adminPassword: 'test-learning-admin-password'
     }, undefined, learningLog);
     await server.start();
     try {
@@ -824,7 +767,7 @@ describe('DashboardServer account routes', () => {
       aboveHeaderCode: '<script>window.adConfig={enabled:true};</script><meta name="provider-test" content="verified">'
     });
     const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accountStore, {
-      publicUrl: origin, trustProxy: false, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+      publicUrl: origin, trustProxy: false
     }, settings);
     await server.start();
     try {
@@ -851,7 +794,7 @@ describe('DashboardServer account routes', () => {
       location: '407 John F. Kennedy Airport', confidence: 0.9, newsworthinessScore: 2
     });
     const server = new DashboardServer(dashboardStore, port, '127.0.0.1', undefined, undefined, {
-      publicUrl: 'https://nycalert.ai', trustProxy: false, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@nycalert.ai'
+      publicUrl: 'https://nycalert.ai', trustProxy: false
     });
     await server.start();
     try {
@@ -886,7 +829,7 @@ describe('DashboardServer account routes', () => {
       openGraphImage: '/social-card.jpg'
     });
     const server = new DashboardServer(dashboardStore, port, '127.0.0.1', undefined, undefined, {
-      publicUrl: 'https://nycalert.ai', trustProxy: false, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@nycalert.ai'
+      publicUrl: 'https://nycalert.ai', trustProxy: false
     }, settings);
     await server.start();
     try {

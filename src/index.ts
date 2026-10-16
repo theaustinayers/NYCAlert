@@ -8,6 +8,7 @@ import { SubscriptionStore } from './storage/subscription-store.js';
 import { AccountStore } from './storage/account-store.js';
 import { SiteSettingsStore } from './storage/site-settings-store.js';
 import { DashboardServer } from './web/dashboard-server.js';
+import { sendPhpMail } from './providers/php-mail.js';
 import { DashboardStore } from './services/dashboard-store.js';
 import { CallAnalysisPipeline, OpenAiTriageProvider, WhisperCppTranscriber } from './providers/ai.js';
 import { CallProcessor } from './services/call-processor.js';
@@ -49,12 +50,7 @@ const dashboard = new DashboardServer(dashboardStore, config.dashboardPort, conf
   trustProxy: config.trustProxy,
   adminEmail: config.adminEmail,
   adminPassword: config.adminPassword,
-  smtpHost: config.smtpHost,
-  smtpPort: config.smtpPort,
-  smtpSecure: config.smtpSecure,
-  smtpUsername: config.smtpUsername,
-  smtpPassword: config.smtpPassword,
-  smtpFrom: config.smtpFrom
+  sendEmail: sendPhpMail
 }, siteSettingsStore, learningLog, deploymentUpdater, xPublisher, incidentVoteStore, config.dashboardReadApiOrigins);
 const incidentGeocoder = new NominatimIncidentGeocoder(config.mapGeocoderContact);
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
