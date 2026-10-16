@@ -129,6 +129,7 @@ describe('DashboardServer account routes', () => {
       assert.match(html, /id="mdt-logon"/);
       assert.match(html, /id="mdt-sound-toggle"/);
       assert.match(html, /id="mdt-incident-alert"/);
+      assert.match(html, /src="\/fdny_mdt_run\.mp3"/);
       assert.match(html, /id="mdt-xmit-form"/);
       assert.match(html, /id="mdt-refresh"[^>]*>XMIT/);
       assert.match(html, /id="mdt-xmit"[^>]*>XMIT<\/button><time id="mdt-clock"/);
@@ -154,6 +155,10 @@ describe('DashboardServer account routes', () => {
       assert.match(emscadStylesText, /\.mdt-status time\{order:3/);
       assert.match(emscadStylesText, /\.mdt-status \.mdt-xmit-form\{order:1\}/);
       assert.match(emscadStylesText, /\.community-note-role\.buff/);
+      const alertAudio = await fetch(`${origin}/fdny_mdt_run.mp3`);
+      assert.equal(alertAudio.status, 200);
+      assert.match(alertAudio.headers.get('content-type') ?? '', /audio\/mpeg/);
+      assert.ok((await alertAudio.arrayBuffer()).byteLength > 0);
       const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-9`);
       assert.equal(script.status, 200);
       const source = await script.text();
