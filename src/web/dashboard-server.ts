@@ -1284,13 +1284,30 @@ export class DashboardServer {
           json(response, 400, { error: 'Provide an account status or webhookAccessSuspended value.' });
           return true;
         }
-        let account = status !== undefined ? await this.accounts.updateAccount(match[1]!, { status: status as AccountStatus }) : this.accounts.listAdminAccounts().find((item) => item.id === match[1]!);
+        const previousAccount = this.accounts.listAdminAccounts().find((item) => item.id === match[1]!);
+        const newlyApproved = status === 'approved' && previousAccount && previousAccount.status !== 'approved';
+        let account = status !== undefined ? await this.accounts.updateAccount(match[1]!, { status: status as AccountStatus }) : previousAccount;
         if (webhookAccessSuspended !== undefined) account = await this.accounts.setWebhookAccessSuspended(match[1]!, webhookAccessSuspended as boolean);
         if (communityUpdatesSuspended !== undefined) account = await this.accounts.setCommunityUpdatesSuspended(match[1]!, communityUpdatesSuspended as boolean);
         if (account && status !== undefined) logger.info({ action: 'audience-account-status-updated', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id, status }, 'Audience account status updated');
         if (account && webhookAccessSuspended !== undefined) logger.warn({ action: webhookAccessSuspended ? 'audience-webhook-access-suspended' : 'audience-webhook-access-restored', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id }, 'Audience account webhook access changed');
         if (account && communityUpdatesSuspended !== undefined) logger.warn({ action: communityUpdatesSuspended ? 'community-updates-suspended' : 'community-updates-restored', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id }, 'Audience account community update permission changed');
-        json(response, account ? 200 : 404, account ? { account } : { error: 'Account not found.' });
+        let approvalEmail: 'submitted' | 'failed' | 'not-configured' | undefined;
+        if (newlyApproved && account && account.emailVerified && (account.accountType === 'buff' || account.accountType === 'news')) {
+          approvalEmail = 'not-configured';
+          if (this.authConfig.sendEmail) {
+            try {
+              await this.authConfig.sendEmail(approvalEmailMessage(account, this.authConfig.publicUrl));
+              approvalEmail = 'submitted';
+            } catch {
+              approvalEmail = 'failed';
+            }
+          }
+          logger.info({ action: 'account-approval-email', accountId: account.id, outcome: approvalEmail }, 'Approval confirmation email outcome');
+        }
+        const message = approvalEmail === 'submitted' ? 'Account approved. Confirmation email submitted for delivery.'
+          : approvalEmail ? 'Account approved, but the confirmation email could not be submitted. The user can still log in.' : undefined;
+        json(response, account ? 200 : 404, account ? { account, ...(approvalEmail ? { approvalEmail, message } : {}) } : { error: 'Account not found.' });
       } catch (error) {
         json(response, 400, { error: error instanceof Error ? error.message : 'Invalid request body.' });
       }
@@ -1698,6 +1715,17 @@ function renderHomepageShareHtml(html: string, publicUrl: string, settings: Site
     `<link rel="canonical" href="${escapeAttribute(canonicalUrl)}">`
   ].join('\n  ');
   return page.replace('</head>', `  ${metadata}\n</head>`);
+}
+
+function approvalEmailMessage(account: { email: string; username: string; accountType: string }, publicUrl: string): EmailMessage {
+  const audience = account.accountType === 'buff' ? 'Buff' : 'News Media';
+  const loginUrl = new URL('/?auth=login', publicUrl).toString();
+  return {
+    from: 'NYC Alert <noreply@nycalert.ai>', to: account.email,
+    subject: `Your NYC Alert ${audience} account is approved`,
+    text: `NYC ALERT | ACCOUNT APPROVED\n\nHello ${account.username},\n\nYour ${audience} account has been approved. You can now log in with your existing email address and password and select the ${audience} view.\n\nLog in: ${loginUrl}\n\nNever share your password. NYC Alert provides AI-assisted public safety updates; verify independently.`,
+    html: `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#080d13;padding:24px;font-family:Arial,Helvetica,sans-serif;color:#e7eef6"><table role="presentation" style="max-width:600px;width:100%;margin:auto;background:#101923;border:1px solid #29394a;border-radius:12px"><tr><td style="padding:30px"><p style="color:#91e8ce;font-size:12px;letter-spacing:2px">NYC ALERT / ACCOUNT ACCESS</p><h1>Your account is approved</h1><p>Hello ${escapeMailText(account.username)},</p><p>Your <strong>${audience}</strong> account has been approved. Log in with your existing email address and password, then select the ${audience} view.</p><p style="margin:28px 0"><a href="${escapeMailText(loginUrl)}" style="background:#36c790;color:#07150f;padding:14px 22px;border-radius:8px;text-decoration:none;font-weight:bold">Log in to NYC Alert →</a></p><p style="overflow-wrap:anywhere">Or visit: <a href="${escapeMailText(loginUrl)}" style="color:#8bd8f4">${escapeMailText(loginUrl)}</a></p><p style="color:#8293a4;font-size:12px">Never share your password. AI-assisted public safety updates. Verify independently. Not an emergency dispatch service.</p></td></tr></table></body></html>`
+  };
 }
 
 function verificationEmailText(firstName: string, accountType: AudienceAccountType | 'reviewer', verifyUrl: string): string {

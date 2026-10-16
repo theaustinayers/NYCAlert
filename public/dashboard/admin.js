@@ -345,8 +345,8 @@ function renderUsers() {
 
 async function updateUser(id, status) {
   try {
-    await api(`/api/admin/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
-    showMessage(`User status set to ${status}.`);
+    const result = await api(`/api/admin/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+    showMessage(result.message || `User status set to ${status}.`, result.approvalEmail === 'failed' || result.approvalEmail === 'not-configured');
     await loadUsers();
   } catch (error) { showMessage(error.message, true); }
 }

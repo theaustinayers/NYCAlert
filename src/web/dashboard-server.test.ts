@@ -24,6 +24,55 @@ async function availablePort(): Promise<number> {
 }
 
 describe('DashboardServer account routes', () => {
+  it('emails newly approved Buff and News Media users without duplicate approval emails and reports delivery failures', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const accounts = new AccountStore(join(testDirectory, 'approval-email'));
+    await accounts.init();
+    const messages: Array<{ to: string; subject: string; text: string; html: string }> = [];
+    const config = { publicUrl: origin, trustProxy: false, sendEmail: undefined as ((message: import('../providers/php-mail.js').EmailMessage) => Promise<void>) | undefined };
+    config.sendEmail = async (message) => { messages.push(message); };
+    const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, config);
+    await server.start();
+    const cookie = `nycalert_session=${accounts.createAdminSession()}`;
+    const patch = (id: string, status: string, requestCookie = cookie, requestOrigin = origin) => fetch(`${origin}/api/admin/accounts/${id}`, {
+      method: 'PATCH', headers: { Origin: requestOrigin, Cookie: requestCookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+    });
+    try {
+      for (const accountType of ['buff', 'news'] as const) {
+        const user = await accounts.register({ username: `approve_${accountType}`, firstName: 'Test', lastName: 'User', email: `approve-${accountType}@example.test`, phone: '2125550100', usageCase: 'Testing approval confirmation.', accountType, password: 'Strong-test-password-123' });
+        const before = messages.length;
+        assert.equal((await patch(user.account.id, 'approved')).status, 400, 'unverified approval is rejected');
+        await accounts.verifyEmail(user.verificationToken);
+        assert.equal((await patch(user.account.id, 'approved', '')).status, 401);
+        assert.equal((await patch(user.account.id, 'approved', cookie, 'https://attacker.example')).status, 403);
+        const responses = await Promise.all([patch(user.account.id, 'approved'), patch(user.account.id, 'approved')]);
+        assert.ok(responses.every((response) => response.status === 200));
+        assert.equal(messages.length, before + 1, 'concurrent repeated approvals send only once');
+        const message = messages.at(-1)!;
+        assert.equal(message.to, user.account.email);
+        assert.match(message.subject, accountType === 'buff' ? /Buff/ : /News Media/);
+        assert.match(message.text, /existing email address and password/);
+        assert.ok(message.text.includes(`${origin}/?auth=login`));
+        assert.match(message.html, /Log in to NYC Alert/);
+        assert.doesNotMatch(message.text, /Strong-test-password|verify=/);
+        await patch(user.account.id, 'suspended');
+        assert.equal(messages.length, before + 1);
+      }
+      const failure = await accounts.register({ username: 'approve_failed', firstName: 'Test', lastName: 'User', email: 'approval-failed@example.test', phone: '2125550100', usageCase: 'Testing approval email failure.', accountType: 'buff', password: 'Strong-test-password-123' });
+      await accounts.verifyEmail(failure.verificationToken);
+      config.sendEmail = async () => { throw new Error('Provider failed'); };
+      const failed = await patch(failure.account.id, 'approved');
+      assert.equal(failed.status, 200);
+      assert.equal((await failed.json() as { approvalEmail: string }).approvalEmail, 'failed');
+      assert.equal(accounts.findAccountByEmail(failure.account.email)?.status, 'approved');
+      await patch(failure.account.id, 'suspended');
+      config.sendEmail = undefined;
+      const unavailable = await patch(failure.account.id, 'approved');
+      assert.equal((await unavailable.json() as { approvalEmail: string }).approvalEmail, 'not-configured');
+    } finally { await server.stop(); }
+  });
+
   it('restricts user details to admins/mods and records only authenticated accepted activity and successful logins', async () => {
     const directory = join(testDirectory, 'user-details');
     const accounts = new AccountStore(directory);
@@ -335,13 +384,13 @@ describe('DashboardServer account routes', () => {
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
-      assert.match(html, /\/admin\.js\?v=user-detail-review-20261016-1/);
+      assert.match(html, /\/admin\.js\?v=approval-email-20261016-1/);
       assert.match(html, /id="update-website"/);
       const wordmark = await fetch(`${origin}/nyc-alert-wordmark.svg`);
       assert.equal(wordmark.status, 200);
       assert.match(wordmark.headers.get('content-type') ?? '', /image\/svg\+xml/);
       assert.match(await wordmark.text(), /NYC Alert/);
-      const script = await fetch(`${origin}/admin.js?v=user-detail-review-20261016-1`);
+      const script = await fetch(`${origin}/admin.js?v=approval-email-20261016-1`);
       assert.equal(script.status, 200);
       assert.equal(script.headers.get('cache-control'), 'no-store');
       const adminScript = await script.text();
