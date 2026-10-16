@@ -175,7 +175,8 @@ Restart=on-failure
 RestartSec=5
 UMask=0077
 SupplementaryGroups=postdrop
-NoNewPrivileges=true
+# Postfix's sendmail-compatible helper must apply its setgid postdrop permissions.
+NoNewPrivileges=false
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
