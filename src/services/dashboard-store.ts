@@ -185,6 +185,15 @@ export class DashboardStore {
 
   async init(): Promise<void> {
     await this.incidentDatabase?.init();
+    if (!this.incidentDatabase || !this.allowPublicAudio) return;
+    for (const audio of this.incidentDatabase.listIncidentAudioReferences()) {
+      try {
+        if ((await stat(audio.path)).isFile()) this.audioFiles.set(audio.incidentId, { path: audio.path, contentType: audio.contentType });
+        else this.incidentDatabase.deleteIncidentAudioReference(audio.incidentId);
+      } catch {
+        this.incidentDatabase.deleteIncidentAudioReference(audio.incidentId);
+      }
+    }
   }
 
   close(): void {
@@ -352,8 +361,7 @@ export class DashboardStore {
     let hasAudio = false;
     if (this.allowPublicAudio && input.agency === 'FDNY' && input.audioPath) {
       try {
-        const fileInfo = await stat(input.audioPath);
-        hasAudio = fileInfo.isFile();
+        hasAudio = (await stat(input.audioPath)).isFile();
         if (hasAudio) this.audioFiles.set(id, { path: input.audioPath, contentType: input.audioContentType ?? 'audio/mpeg' });
       } catch {
         hasAudio = false;
@@ -402,7 +410,9 @@ export class DashboardStore {
         }
       }
     }
-    await this.trimAudioReferences();
+    if (hasAudio && input.audioPath) {
+      this.incidentDatabase?.setIncidentAudioReference(id, input.audioPath, input.audioContentType ?? 'audio/mpeg');
+    }
     this.notifyIncidentChange();
     return incident;
   }
@@ -411,7 +421,7 @@ export class DashboardStore {
     const index = this.incidents.findIndex((incident) => incident.id === incidentId);
     const current = this.getIncident(incidentId);
     if (!current) return undefined;
-    let hasAudio = Boolean(this.audioFiles.get(current.id)) || current.hasAudio;
+    let hasAudio = Boolean(this.audioFiles.get(current.id));
     if (!hasAudio && this.allowPublicAudio && current.agency === 'FDNY' && input.audioPath) {
       try {
         hasAudio = (await stat(input.audioPath)).isFile();
@@ -481,6 +491,9 @@ export class DashboardStore {
     };
     if (this.incidentDatabase) this.incidentDatabase.upsert(updated);
     else if (index >= 0) this.incidents[index] = updated;
+    if (hasAudio && input.audioPath && !current.hasAudio) {
+      this.incidentDatabase?.setIncidentAudioReference(current.id, input.audioPath, input.audioContentType ?? 'audio/mpeg');
+    }
     this.notifyIncidentChange();
     return updated;
   }
@@ -578,10 +591,10 @@ export class DashboardStore {
 
   async deleteIncident(incidentId: string): Promise<boolean> {
     const index = this.incidents.findIndex((incident) => incident.id === incidentId);
+    const audio = this.audioFiles.get(incidentId) ?? this.incidentDatabase?.getIncidentAudioReference(incidentId);
     const deleted = this.incidentDatabase ? this.incidentDatabase.delete(incidentId) : index >= 0;
     if (!deleted) return false;
     if (!this.incidentDatabase && index >= 0) this.incidents.splice(index, 1);
-    const audio = this.audioFiles.get(incidentId);
     this.audioFiles.delete(incidentId);
     this.communityIncidentNotes.delete(incidentId);
     if (audio) await this.releaseAudio(audio.path);
@@ -612,32 +625,26 @@ export class DashboardStore {
       .map((incident) => this.withAudioAvailability(incident));
   }
 
-  getAudio(incidentId: string): { path: string; contentType: string } | undefined {
-    return this.audioFiles.get(incidentId);
+  getAudio(_incidentId: string): { path: string; contentType: string } | undefined {
+    return this.allowPublicAudio ? this.audioFiles.get(_incidentId) : undefined;
+  }
+
+  retainsIncidentAudio(path: string): boolean {
+    return [...this.audioFiles.values()].some((audio) => audio.path === path);
   }
 
   private async releaseAudio(path: string): Promise<void> {
-    if (![...this.audioFiles.values(), ...this.liveCallAudioFiles.values()].some((audio) => audio.path === path)) {
-      await rm(path, { force: true });
-    }
+    const inMemory = [...this.audioFiles.values(), ...this.liveCallAudioFiles.values()].some((audio) => audio.path === path);
+    const persisted = this.incidentDatabase?.hasIncidentAudioReference(path) ?? false;
+    if (!inMemory && !persisted) await rm(path, { force: true });
   }
 
   private withAudioAvailability(incident: DashboardIncident): DashboardIncident {
     return {
       ...incident,
-      hasAudio: Boolean(this.audioFiles.get(incident.id)),
+      hasAudio: this.allowPublicAudio && Boolean(this.audioFiles.get(incident.id)),
       communityNotes: this.incidentDatabase ? incident.communityNotes ?? [] : [...(this.communityIncidentNotes.get(incident.id) ?? [])]
     };
-  }
-
-  private async trimAudioReferences(): Promise<void> {
-    while (this.audioFiles.size > this.maxIncidents) {
-      const oldestId = this.audioFiles.keys().next().value as string | undefined;
-      if (!oldestId) return;
-      const audio = this.audioFiles.get(oldestId);
-      this.audioFiles.delete(oldestId);
-      if (audio) await this.releaseAudio(audio.path);
-    }
   }
 
   private notifyIncidentChange(): void {

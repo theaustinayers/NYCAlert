@@ -79,7 +79,7 @@ export class CallFeedPoller {
           if (result !== 'retry') {
             this.provider.acknowledge?.(call);
             acknowledged = true;
-            keepAudio = this.retainProcessedAudio && result === 'alert' && call.agency === 'FDNY';
+            keepAudio = Boolean(audioPath && call.agency === 'FDNY' && this.dashboard?.retainsIncidentAudio(audioPath));
             this.counters.callsProcessed += 1;
           } else {
             this.counters.callsRetried += 1;

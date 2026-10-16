@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { RadioCall } from '../domain/triage.js';
 import type { BroadcastifyProvider } from '../providers/broadcastify.js';
 import type { AudioRetriever } from '../providers/broadcastify-audio.js';
 import type { CallProcessor } from './call-processor.js';
 import { CallFeedPoller } from './call-feed-poller.js';
+import { DashboardStore } from './dashboard-store.js';
 
 const call: RadioCall = {
   id: 'fdny-test-call',
@@ -70,6 +74,41 @@ describe('CallFeedPoller', () => {
       assert.equal(processedCall?.audioPath, undefined);
     } finally {
       poller.stop();
+    }
+  });
+
+  it('retains downloaded FDNY audio when the incident board stores it', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'nyc-call-audio-retention-'));
+    const audioPath = join(directory, 'incident.mp3');
+    await writeFile(audioPath, Buffer.from('approved radio audio'));
+    const provider = createProvider();
+    const dashboard = new DashboardStore(true);
+    const audio: AudioRetriever = { async retrieve() { return { path: audioPath, contentType: 'audio/mpeg' }; } };
+    const processor = {
+      async process(value: RadioCall, loadIncidentAudio?: () => Promise<{ path: string; contentType: string }>) {
+        const retrieved = await loadIncidentAudio?.();
+        assert.ok(retrieved);
+        await dashboard.publish({
+          title: 'Reported fire', summary: 'Fire reported.', occurredAt: value.occurredAt,
+          agency: value.agency, borough: value.borough, category: 'newsworthy', audioPath: retrieved.path,
+          audioContentType: retrieved.contentType, confidence: 0.9, newsworthinessScore: 4
+        });
+        return 'alert' as const;
+      }
+    } as CallProcessor;
+    const poller = new CallFeedPoller(provider, processor, audio, true, 60_000, dashboard);
+
+    try {
+      await pollOnce(poller, provider);
+      const incident = dashboard.search()[0];
+      assert.equal(incident?.hasAudio, true);
+      assert.equal(dashboard.getAudio(incident!.id)?.path, audioPath);
+      assert.equal((await stat(audioPath)).isFile(), true);
+      await dashboard.deleteIncident(incident!.id);
+      await assert.rejects(stat(audioPath));
+    } finally {
+      poller.stop();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 });

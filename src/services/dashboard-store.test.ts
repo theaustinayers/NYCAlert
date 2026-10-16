@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -118,6 +118,54 @@ describe('DashboardStore', () => {
     const incident = await store.publish({ ...input, audioPath });
     assert.equal(incident.hasAudio, true);
     assert.deepEqual(store.getAudio(incident.id), { path: audioPath, contentType: 'audio/mpeg' });
+  });
+
+  it('keeps approved incident audio available across restarts until the incident is deleted', async () => {
+    const directory = join(testDirectory, 'durable-incident-audio');
+    const audioPath = join(directory, 'calls', 'incident.mp3');
+    await mkdir(join(directory, 'calls'), { recursive: true });
+    await writeFile(audioPath, Buffer.from('approved incident audio'));
+    const store = new DashboardStore(true, 300, false, 100, new IncidentDatabase(directory));
+    await store.init();
+    const incident = await store.publish({ ...input, audioPath });
+    assert.equal(incident.hasAudio, true);
+    store.close();
+
+    const reopened = new DashboardStore(true, 300, false, 100, new IncidentDatabase(directory));
+    await reopened.init();
+    assert.equal(reopened.search()[0]?.hasAudio, true);
+    assert.deepEqual(reopened.getAudio(incident.id), { path: audioPath, contentType: 'audio/mpeg' });
+    assert.equal(await reopened.deleteIncident(incident.id), true);
+    await assert.rejects(stat(audioPath));
+    reopened.close();
+  });
+
+  it('keeps retained audio across a temporary public-audio opt-out and restores it when re-enabled', async () => {
+    const directory = join(testDirectory, 'disabled-incident-audio');
+    const audioPath = join(directory, 'calls', 'incident.mp3');
+    const secondAudioPath = join(directory, 'calls', 'second-incident.mp3');
+    await mkdir(join(directory, 'calls'), { recursive: true });
+    await writeFile(audioPath, Buffer.from('approved incident audio'));
+    await writeFile(secondAudioPath, Buffer.from('second approved incident audio'));
+    const enabled = new DashboardStore(true, 300, false, 100, new IncidentDatabase(directory));
+    await enabled.init();
+    const incident = await enabled.publish({ ...input, audioPath });
+    const secondIncident = await enabled.publish({ ...input, title: 'Second incident', audioPath: secondAudioPath });
+    enabled.close();
+
+    const disabled = new DashboardStore(false, 300, false, 100, new IncidentDatabase(directory));
+    await disabled.init();
+    assert.ok(disabled.search().every((item) => !item.hasAudio));
+    assert.equal(disabled.getAudio(incident.id), undefined);
+    assert.equal(await disabled.deleteIncident(incident.id), true);
+    await assert.rejects(stat(audioPath));
+    disabled.close();
+
+    const reenabled = new DashboardStore(true, 300, false, 100, new IncidentDatabase(directory));
+    await reenabled.init();
+    assert.equal(reenabled.search().length, 1);
+    assert.equal(reenabled.getAudio(secondIncident.id)?.path, secondAudioPath);
+    reenabled.close();
   });
 
   it('formats the card title as concise headline, location, agency, and borough', async () => {

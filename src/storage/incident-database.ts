@@ -59,6 +59,12 @@ interface CommunityNoteRow {
   created_at: string;
 }
 
+export interface IncidentAudioReference {
+  incidentId: string;
+  path: string;
+  contentType: string;
+}
+
 interface IncidentWriteRow {
   id: string; title: string; summary: string; occurredAt: string; updatedAt: string; agency: Agency; agencies: string;
   borough: Borough | 'Citywide'; category: AlertCategory; callType: CallType | null; location: string | null;
@@ -126,6 +132,12 @@ const schema = `
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS incident_community_notes_parent_created_idx ON incident_community_notes(incident_id, created_at);
+  CREATE TABLE IF NOT EXISTS incident_audio (
+    incident_id TEXT PRIMARY KEY REFERENCES incidents(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    content_type TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS incident_audio_path_idx ON incident_audio(path);
   CREATE VIRTUAL TABLE IF NOT EXISTS incidents_fts USING fts5(incident_id UNINDEXED, title, summary, location, units, boxes, tokenize='unicode61 remove_diacritics 2');
 `;
 
@@ -206,6 +218,30 @@ export class IncidentDatabase {
   get(id: string): DashboardIncident | undefined {
     const row = this.getDatabase().prepare('SELECT * FROM incidents WHERE id = ?').get(id) as IncidentRow | undefined;
     return row ? this.hydrate([row])[0] : undefined;
+  }
+
+  listIncidentAudioReferences(): IncidentAudioReference[] {
+    return this.getDatabase().prepare('SELECT incident_id AS incidentId, path, content_type AS contentType FROM incident_audio')
+      .all() as IncidentAudioReference[];
+  }
+
+  getIncidentAudioReference(incidentId: string): IncidentAudioReference | undefined {
+    return this.getDatabase().prepare('SELECT incident_id AS incidentId, path, content_type AS contentType FROM incident_audio WHERE incident_id = ?')
+      .get(incidentId) as IncidentAudioReference | undefined;
+  }
+
+  setIncidentAudioReference(incidentId: string, path: string, contentType: string): void {
+    this.getDatabase().prepare(`INSERT INTO incident_audio (incident_id, path, content_type) VALUES (?, ?, ?)
+      ON CONFLICT(incident_id) DO UPDATE SET path = excluded.path, content_type = excluded.content_type`)
+      .run(incidentId, path, contentType);
+  }
+
+  deleteIncidentAudioReference(incidentId: string): void {
+    this.getDatabase().prepare('DELETE FROM incident_audio WHERE incident_id = ?').run(incidentId);
+  }
+
+  hasIncidentAudioReference(path: string): boolean {
+    return Boolean(this.getDatabase().prepare('SELECT 1 FROM incident_audio WHERE path = ? LIMIT 1').get(path));
   }
 
   addCommunityNote(incidentId: string, note: CommunityIncidentNote): void {
