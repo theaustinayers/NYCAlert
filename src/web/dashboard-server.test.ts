@@ -270,6 +270,11 @@ describe('DashboardServer account routes', () => {
       assert.match(dashboardSource, /homepageLiveCallRetentionMs = 30 \* 60_000/);
       assert.match(dashboardSource, /state\.incidents = retainRecentIncidents/);
       assert.match(dashboardSource, /state\.calls = retainRecentLiveCalls/);
+      assert.match(dashboardSource, /function getActiveTickerIncidents/);
+      assert.match(dashboardSource, /const activeIncidents = getActiveTickerIncidents\(incidents\)/);
+      assert.match(dashboardSource, /incidentTickerVersion\(incident\) !== state\.incidentVersions\.get/);
+      assert.match(dashboardSource, /if \(Number\(incident\.newsworthinessScore\) >= 5\) \{\s*setFeaturedTicker\(incident, now \+ 10 \* 60_000\)/);
+      assert.match(dashboardSource, /const recent = \[\.\.\.getActiveTickerIncidents\(\)\]/);
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();

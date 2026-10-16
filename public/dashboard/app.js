@@ -1,9 +1,9 @@
 const state = {
   agency: 'all', query: '', view: 'incidents', sortMode: 'smart', liveCategories: null, feeds: [], incidents: [], calls: [], pipelines: {},
-  refreshPaused: false, incidentIds: new Set(), incidentUpdateCounts: new Map(), firstIncidentLoad: true, announcedIds: new Set(), freshIncidentIds: new Map(),
+  refreshPaused: false, incidentIds: new Set(), incidentUpdateCounts: new Map(), incidentVersions: new Map(), firstIncidentLoad: true, announcedIds: new Set(), freshIncidentIds: new Map(),
   pageStartedAt: Date.now(),
   tickerQueue: [], tickerActive: false, tickerIndex: 0, tickerRotationTimer: null, tickerOverrideTimer: null,
-  tickerFeaturedIncident: null, tickerFeaturedUntil: 0, tickerFeaturedTimer: null,
+  tickerFeaturedIncident: null, tickerFeaturedUntil: 0, tickerFeaturedTimer: null, tickerDisplayedIncidentId: null,
   map: null, mapLayer: null, mapMarkers: new Map(), mapHasFitBounds: false, mapTimer: null, mapExpiryTimer: null, mapEvents: null,
   mapFocusedIncidentId: null, mapPreviousView: null,
   mapRefreshTimer: null, mapRefreshSequence: 0, liveUpdates: null, authSession: null, pendingAudience: null, incidentMapToastTimer: null,
@@ -620,12 +620,26 @@ function compareIncidents(left, right) {
   return smartScore(right, rightTime, rightPriority) - smartScore(left, leftTime, leftPriority) || rightTime - leftTime;
 }
 
+function getActiveTickerIncidents(incidents = state.incidents, now = Date.now()) {
+  return retainRecentIncidents(incidents, now).filter((incident) =>
+    (state.boroughs.has(incident.borough) || (state.boroughs.size > 0 && incident.borough === 'Citywide'))
+      && (state.agency === 'all' || (incident.agencies?.includes(state.agency) ?? incident.agency === state.agency))
+  );
+}
+
+function incidentTickerVersion(incident) {
+  return [incident.updatedAt, incident.updateCount, incident.category, incident.newsworthinessScore,
+    incident.buffInterestScore, incident.assignmentDeskScore, incident.title, incident.summary].join('|');
+}
+
 function trackNewIncidents(incidents) {
+  const activeIncidents = getActiveTickerIncidents(incidents);
   if (state.firstIncidentLoad) {
     state.incidentIds = new Set(incidents.map((incident) => incident.id));
     state.incidentUpdateCounts = new Map(incidents.map((incident) => [incident.id, Number(incident.updateCount) || 0]));
+    state.incidentVersions = new Map(incidents.map((incident) => [incident.id, incidentTickerVersion(incident)]));
     state.firstIncidentLoad = false;
-    const newest = [...incidents].sort((left, right) => new Date(right.occurredAt) - new Date(left.occurredAt))[0];
+    const newest = [...activeIncidents].sort((left, right) => new Date(right.updatedAt || right.occurredAt) - new Date(left.updatedAt || left.occurredAt))[0];
     const featuredUntil = newest ? new Date(newest.occurredAt).getTime() + 10 * 60_000 : 0;
     if (newest && featuredUntil > Date.now()) setFeaturedTicker(newest, featuredUntil);
     else startTickerRotation();
@@ -647,17 +661,38 @@ function trackNewIncidents(incidents) {
   if (newlySeen.length && state.incidentPopupEnabled && document.visibilityState === 'visible') {
     showIncidentArrivalPopup(newlySeen[0]);
   }
-  const updated = incidents.filter((incident) => state.incidentIds.has(incident.id)
-    && (Number(incident.updateCount) || 0) > (state.incidentUpdateCounts.get(incident.id) || 0));
+  const updated = activeIncidents.filter((incident) => state.incidentIds.has(incident.id)
+    && incidentTickerVersion(incident) !== state.incidentVersions.get(incident.id));
   for (const incident of incidents) state.incidentUpdateCounts.set(incident.id, Number(incident.updateCount) || 0);
+  for (const incident of incidents) state.incidentVersions.set(incident.id, incidentTickerVersion(incident));
   for (const incident of updated) {
     state.freshIncidentIds.set(incident.id, now + 25_000);
     const latestUpdate = incident.updates.at(-1)?.summary || incident.summary;
-    enqueueIncidentTicker({ ...incident, summary: latestUpdate, isUpdate: true }, 'update');
+    if (Number(incident.newsworthinessScore) >= 5) {
+      setFeaturedTicker(incident, now + 10 * 60_000);
+    } else {
+      enqueueIncidentTicker({ ...incident, summary: latestUpdate, isUpdate: true }, 'update');
+    }
   }
   const retainedIds = new Set(incidents.map((incident) => incident.id));
+  const activeTickerIds = new Set(activeIncidents.map((incident) => incident.id));
+  state.tickerQueue = state.tickerQueue.filter((item) => activeTickerIds.has(item.incident.id));
   state.incidentIds = retainedIds;
   state.incidentUpdateCounts = new Map(incidents.map((incident) => [incident.id, Number(incident.updateCount) || 0]));
+  state.incidentVersions = new Map(incidents.map((incident) => [incident.id, incidentTickerVersion(incident)]));
+  if (state.tickerFeaturedIncident && !activeIncidents.some((incident) => incident.id === state.tickerFeaturedIncident.id)) {
+    if (state.tickerFeaturedTimer) clearTimeout(state.tickerFeaturedTimer);
+    state.tickerFeaturedIncident = null;
+    state.tickerFeaturedUntil = 0;
+    state.tickerFeaturedTimer = null;
+    if (!state.tickerActive) showNextIncidentTicker();
+  }
+  if (state.tickerDisplayedIncidentId && !activeTickerIds.has(state.tickerDisplayedIncidentId) && !state.tickerFeaturedIncident) {
+    if (state.tickerOverrideTimer) clearTimeout(state.tickerOverrideTimer);
+    state.tickerOverrideTimer = null;
+    state.tickerActive = false;
+    showNextIncidentTicker();
+  }
   for (const id of state.announcedIds) if (!retainedIds.has(id)) state.announcedIds.delete(id);
   for (const id of state.freshIncidentIds.keys()) if (!retainedIds.has(id)) state.freshIncidentIds.delete(id);
   if (newlySeen.length || updated.length) renderIncidents();
@@ -721,6 +756,7 @@ function setFeaturedTicker(incident, expiresAt) {
 }
 
 function displayTickerIncident(incident) {
+  state.tickerDisplayedIncidentId = incident.id;
   const ticker = $('#incident-ticker');
   const isBreaking = Number(incident.newsworthinessScore) === 5;
   const publicScore = Math.round(Math.max(1, Math.min(5, Number(incident.newsworthinessScore) || 1)));
@@ -747,7 +783,7 @@ function displayTickerIncident(incident) {
 function startTickerRotation() {
   if (state.tickerActive || state.tickerRotationTimer || (state.tickerFeaturedIncident && state.tickerFeaturedUntil > Date.now())) return;
   const rotate = () => {
-    const recent = [...state.incidents].sort((left, right) => new Date(right.updatedAt || right.occurredAt) - new Date(left.updatedAt || left.occurredAt));
+    const recent = [...getActiveTickerIncidents()].sort((left, right) => new Date(right.updatedAt || right.occurredAt) - new Date(left.updatedAt || left.occurredAt));
     if (!recent.length) {
       $('#incident-ticker-label').textContent = 'INCIDENT:';
       $('#incident-ticker').classList.remove('breaking', 'newsworthy');
