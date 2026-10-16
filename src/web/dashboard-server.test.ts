@@ -86,6 +86,8 @@ describe('DashboardServer account routes', () => {
       assert.match(html, /id="mdt-incident-alert"/);
       assert.match(html, /src="\/fdny_mdt_run\.mp3"/);
       assert.match(html, /id="mdt-xmit-form"/);
+      assert.match(html, /id="mdt-community-message"[^>]*contenteditable="false"/);
+      assert.doesNotMatch(html, /<input id="mdt-community-message"/);
       assert.match(html, /administrator, moderator, or reviewer account, to XMIT a community note/);
       assert.match(html, /id="mdt-refresh"[^>]*>XMIT/);
       assert.match(html, /administrator, moderator, or reviewer account, to XMIT a community note/);
@@ -118,7 +120,7 @@ describe('DashboardServer account routes', () => {
       assert.equal(alertAudio.status, 200);
       assert.match(alertAudio.headers.get('content-type') ?? '', /audio\/mpeg/);
       assert.ok((await alertAudio.arrayBuffer()).byteLength > 0);
-      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-15`);
+      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-16`);
       assert.equal(script.status, 200);
       const source = await script.text();
       const topLevelPrelude = source.split('function updateClock()')[0] ?? '';

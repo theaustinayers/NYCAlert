@@ -586,7 +586,8 @@ function updateXmitControls() {
   const showComposer = state.xmitPrompted
     && (canSubmit ? Boolean(state.currentIncidentId && state.view === 'dispatch') : !state.authSession);
   messageInput.hidden = !showComposer;
-  messageInput.disabled = !enabled;
+  messageInput.contentEditable = String(enabled);
+  messageInput.setAttribute('aria-disabled', String(!enabled));
   $('.mdt-status').classList.toggle('composer-visible', showComposer);
   $('#mdt-xmit').disabled = state.xmitBusy;
   $('#mdt-logon').textContent = 'LOGON';
@@ -673,7 +674,7 @@ async function logoutFromMdt() {
 async function submitCommunityNote(event) {
   event.preventDefault();
   const messageField = $('#mdt-community-message');
-  const message = messageField.value.trim();
+  const message = messageField.textContent.trim();
   if (!state.authSession) {
     state.xmitPrompted = true;
     updateXmitControls();
@@ -692,7 +693,7 @@ async function submitCommunityNote(event) {
     state.xmitPrompted = true;
     updateXmitControls();
     showMdtFeedback('TYPE A COMMUNITY NOTE, THEN PRESS XMIT');
-    if (!messageField.disabled) messageField.focus();
+    if (messageField.contentEditable === 'true') messageField.focus();
     return;
   }
   const incidentId = state.currentIncidentId;
@@ -711,7 +712,7 @@ async function submitCommunityNote(event) {
       if (!notes.some((note) => note.id === result.note.id)) incident.communityNotes = [...notes, result.note];
       render();
     }
-    messageField.value = '';
+    messageField.textContent = '';
     showMdtFeedback('NOTE SAVED · PUBLIC COMMUNITY CONTRIBUTION · UNVERIFIED · NOT SENT TO AGENCY');
   } catch (error) {
     showMdtFeedback(error instanceof Error ? error.message : 'Could not XMIT community note.', true);
