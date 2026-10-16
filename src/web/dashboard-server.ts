@@ -10,6 +10,7 @@ import { alertCategories, type AlertCategory } from '../domain/triage.js';
 import { dashboardFeedLinks } from '../providers/broadcastify-catalog.js';
 import type { DashboardStore } from '../services/dashboard-store.js';
 import type { AccountStore, AccountStatus, AccountWebhook, AudienceAccountType } from '../storage/account-store.js';
+import { EmailVerificationRequiredError } from '../storage/account-store.js';
 import type { SiteSettings, SiteSettingsStore } from '../storage/site-settings-store.js';
 import type { LearningLog } from '../services/learning-log.js';
 import type { DeploymentUpdater } from '../services/deployment-updater.js';
@@ -110,6 +111,7 @@ export class DashboardServer {
   private pendingIncidentProvider?: () => Array<Record<string, unknown>>;
   private pendingIncidentDiscarder?: (id: string) => boolean;
   private pendingIncidentAllower?: (id: string) => Promise<{ incidentId: string } | undefined>;
+  private pendingIncidentsPersistent = false;
 
   constructor(
     private readonly store: DashboardStore,
@@ -129,11 +131,13 @@ export class DashboardServer {
   setPendingIncidentAdminHandlers(
     provider: () => Array<Record<string, unknown>>,
     discard: (id: string) => boolean,
-    allow?: (id: string) => Promise<{ incidentId: string } | undefined>
+    allow?: (id: string) => Promise<{ incidentId: string } | undefined>,
+    persistent = false
   ): void {
     this.pendingIncidentProvider = provider;
     this.pendingIncidentDiscarder = discard;
     this.pendingIncidentAllower = allow;
+    this.pendingIncidentsPersistent = persistent;
   }
 
   async start(): Promise<void> {
@@ -686,6 +690,16 @@ export class DashboardServer {
         return true;
       }
       try {
+        if (action === 'resend-verification') {
+          const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+          if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            json(response, 400, { error: 'Enter a valid email address.' });
+            return true;
+          }
+          await this.resendVerification(request, email);
+          json(response, 200, { message: 'If this email has an account awaiting verification, a verification email has been requested. Check your inbox and spam folder. Please allow a minute between requests.' });
+          return true;
+        }
         if (action === 'admin-invite-complete') {
           const token = typeof body.token === 'string' ? body.token : '';
           const password = typeof body.password === 'string' ? body.password : '';
@@ -702,6 +716,11 @@ export class DashboardServer {
           }
           const input = validateRegistration(body);
           if (input.email === this.authConfig.adminEmail?.toLowerCase()) throw new Error('That email is reserved for the bootstrap administrator.');
+          if (this.accounts.findAccountByEmail(input.email)) {
+            await this.resendVerification(request, input.email);
+            json(response, 201, { message: 'Check your email for a verification link. After verifying, an administrator must approve the account.' });
+            return true;
+          }
           const registered = await this.accounts.register(input);
           try {
             const verifyUrl = new URL('/', this.authConfig.publicUrl);
@@ -752,7 +771,16 @@ export class DashboardServer {
               ? { kind: 'admin', account: loggedIn.account }
               : { kind: 'user', account: loggedIn.account } });
             return true;
-          } catch {
+          } catch (error) {
+            if (error instanceof EmailVerificationRequiredError) {
+              const result = await this.resendVerification(request, error.account.email);
+              json(response, 403, { error: result === 'sent'
+                ? 'Verify your email before signing in. A new verification email was sent; check your inbox and spam folder.'
+                : result === 'cooldown'
+                  ? 'Verify your email before signing in. A verification email was recently requested; check your inbox and spam folder or try again later.'
+                  : 'Verify your email before signing in. Email delivery is temporarily unavailable; please try again later.' });
+              return true;
+            }
             json(response, 401, { error: 'Sign-in failed. Check your credentials; a verified, approved account is required.' });
             return true;
           }
@@ -812,7 +840,7 @@ export class DashboardServer {
           users: accounts.length,
           pendingUsers: accounts.filter((account) => account.status === 'pending-approval' || account.status === 'pending-verification').length,
           pendingIncidents: pendingIncidents.length,
-          dataWindow: 'published incidents persist in SQLite; Live Radio calls and pending correlation state reset when service restarts'
+          dataWindow: 'published incidents and private provisional reports persist in SQLite; Live Radio calls remain in memory; provisional reports are retained for two hours after their latest update'
         });
         return true;
       }
@@ -904,7 +932,7 @@ export class DashboardServer {
         return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/incidents/pending') {
-        json(response, 200, { incidents: this.pendingIncidentProvider?.() ?? [], available: Boolean(this.pendingIncidentProvider), ephemeral: true });
+        json(response, 200, { incidents: this.pendingIncidentProvider?.() ?? [], available: Boolean(this.pendingIncidentProvider), ephemeral: !this.pendingIncidentsPersistent });
         return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/webhooks') {
@@ -1134,6 +1162,30 @@ export class DashboardServer {
           json(response, 201, { message: 'Administrator invitation sent.' });
         } catch (error) {
           json(response, 400, { error: error instanceof Error ? error.message : 'Could not invite administrator.' });
+        }
+        return true;
+      }
+      const resendMatch = /^\/api\/admin\/accounts\/([a-f0-9]{32})\/resend-verification$/i.exec(url.pathname);
+      if (resendMatch) {
+        if (!isAdmin) { json(response, 403, { error: 'Only administrators can resend verification emails.' }); return true; }
+        if (request.method !== 'POST') { json(response, 405, { error: 'Method not allowed.' }); return true; }
+        if (!this.hasSameOrigin(request)) { json(response, 403, { error: 'Request origin was not accepted.' }); return true; }
+        if (!this.takeRateLimit(request, 'admin-resend-verification', 10, 15 * 60_000)) {
+          json(response, 429, { error: 'Too many verification requests. Please try again later.' }); return true;
+        }
+        const account = this.accounts.listAdminAccounts().find((item) => item.id === resendMatch[1]);
+        if (!account) { json(response, 404, { error: 'Account not found.' }); return true; }
+        if (account.emailVerified || account.status !== 'pending-verification') {
+          json(response, 409, { error: 'Only users awaiting email verification can receive a verification email.' }); return true;
+        }
+        const result = await this.resendVerification(request, account.email);
+        if (result === 'sent') {
+          logger.info({ action: 'verification-email-resent', actorId: adminSession.account?.id ?? 'bootstrap-admin', targetId: account.id }, 'Verification email resent');
+          json(response, 200, { message: 'Verification email sent. The new link expires in 24 hours.' });
+        } else if (result === 'cooldown') {
+          json(response, 429, { error: 'A verification email was recently requested. Please wait before trying again.' });
+        } else {
+          json(response, 503, { error: 'Verification email could not be sent. Please try again later.' });
         }
         return true;
       }
@@ -1390,6 +1442,29 @@ export class DashboardServer {
     });
     for (const client of this.eventClients) {
       if (!client.destroyed && !client.writableEnded) client.write(`event: community-upvote\ndata: ${event}\n\n`);
+    }
+  }
+
+  private async resendVerification(request: IncomingMessage, email: string): Promise<'sent' | 'cooldown' | 'unavailable' | 'ineligible'> {
+    if (!this.accounts || !this.authConfig?.sendEmail) return 'unavailable';
+    const emailKey = createHash('sha256').update(email.trim().toLowerCase()).digest('hex');
+    if (!this.takeRateLimit(request, `verification-email:${emailKey}`, 5, 60 * 60_000, 'global')) return 'cooldown';
+    const config = this.authConfig;
+    const sendEmail = config.sendEmail!;
+    try {
+      return await this.accounts.resendVerificationEmail(email, async (account, token) => {
+        const verifyUrl = new URL('/', config.publicUrl);
+        verifyUrl.hash = new URLSearchParams({ verify: token }).toString();
+        await sendEmail({
+          from: 'NYC Alert <noreply@nycalert.ai>', to: account.email, subject: 'Verify your NYC Alert account',
+          text: verificationEmailText(account.username, account.accountType, verifyUrl.toString()),
+          html: verificationEmailHtml(account.username, account.accountType, verifyUrl.toString())
+        });
+      });
+    } catch {
+      // Do not log provider errors that may contain email addresses or verification links.
+      logger.warn({ action: 'verification-email-delivery-failed' }, 'Could not resend verification email');
+      return 'unavailable';
     }
   }
 

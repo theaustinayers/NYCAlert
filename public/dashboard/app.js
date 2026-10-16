@@ -1384,14 +1384,29 @@ function renderAuthForm(mode) {
       <button class="auth-form-submit" type="submit">Log in</button>
       <p class="auth-switch">Need an account? <button type="button" data-auth-mode="register">Register</button></p>`;
   }
+  form.insertAdjacentHTML('beforeend', '<p class="auth-switch">Missing your verification email? <button type="button" data-resend-verification>Resend verification email</button></p>');
+  form.querySelector('[data-resend-verification]').addEventListener('click', resendAuthVerification);
   form.querySelector('[data-auth-mode]')?.addEventListener('click', (event) => openAuthModal(event.currentTarget.dataset.authMode));
-  form.addEventListener('submit', submitAuthForm, { once: true });
+  form.onsubmit = submitAuthForm;
+}
+
+async function resendAuthVerification(event) {
+  const button = event.currentTarget;
+  const email = button.closest('form').elements.namedItem('email');
+  if (!email.reportValidity() || button.disabled) return;
+  button.disabled = true;
+  try {
+    const result = await authRequest('/api/auth/resend-verification', { email: email.value });
+    renderAuthMessage(result.message, 'success');
+  } catch (error) { renderAuthMessage(error.message, 'error'); }
+  finally { button.disabled = false; }
 }
 
 async function submitAuthForm(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const submit = form.querySelector('.auth-form-submit');
+  if (submit.disabled) return;
   submit.disabled = true;
   renderAuthMessage('Please wait…');
   const values = Object.fromEntries(new FormData(form).entries());
@@ -1441,7 +1456,7 @@ function openAdminInviteCompletion(token, invitedUsername = '') {
     ? `<p class="auth-field full">PUBLIC USERNAME · @${escapeHtml(invitedUsername)}<input type="hidden" name="username" value="${escapeHtml(invitedUsername)}"></p>`
     : '<label class="auth-field full">PUBLIC USERNAME<input name="username" autocomplete="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" required><small>3–24 characters: letters, numbers, and underscores.</small></label>';
   form.innerHTML = `${usernameField}<label class="auth-field full">NEW PASSWORD (16+ CHARACTERS)<input name="password" type="password" autocomplete="new-password" minlength="16" maxlength="128" required></label><button class="auth-form-submit" type="submit">Activate staff account</button>`;
-  form.addEventListener('submit', submitAuthForm, { once: true });
+  form.onsubmit = submitAuthForm;
   form.querySelector('input')?.focus();
 }
 

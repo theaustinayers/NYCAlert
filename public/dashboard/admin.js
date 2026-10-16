@@ -321,6 +321,13 @@ function renderUsers() {
   const table = $('#users-table');
   if (!users.length) { table.innerHTML = '<tr><td colspan="6">No users match these filters.</td></tr>'; return; }
   table.innerHTML = users.map((user) => `<tr data-user-id="${escapeHtml(user.id)}"><td><div class="admin-user-cell"><strong>@${escapeHtml(user.username)}</strong><small>Private account name: ${escapeHtml(user.firstName)} ${escapeHtml(user.lastName)}</small><small>${escapeHtml(user.email)}</small><small>${escapeHtml(user.phone || '')}</small></div></td><td><span class="admin-badge">${escapeHtml(user.accountType)}</span><small>${user.usageCase ? `<br>${escapeHtml(user.usageCase)}` : ''}</small></td><td><span class="admin-badge ${escapeHtml(user.status)}">${escapeHtml(user.status)}</span>${user.webhookAccessSuspended ? '<small><br>Webhook access suspended</small>' : ''}${user.communityUpdatesSuspended ? '<small><br>Community updates suspended</small>' : ''}</td><td>${user.emailVerified ? 'Verified' : 'No'}</td><td>${escapeHtml(formatTime(user.createdAt))}</td><td><div class="admin-row-actions">${user.emailVerified && user.status !== 'approved' ? '<button class="approve" data-user-action="approved">Approve</button>' : ''}${user.status !== 'suspended' ? '<button data-user-action="suspended">Suspend</button>' : '<button data-user-action="pending-approval">Restore</button>'}<button data-webhook-access="${user.webhookAccessSuspended ? 'false' : 'true'}">${user.webhookAccessSuspended ? 'Restore hooks' : 'Suspend hooks'}</button><button data-community-updates="${user.communityUpdatesSuspended ? 'false' : 'true'}">${user.communityUpdatesSuspended ? 'Restore comments' : 'Suspend comments'}</button><button class="danger" data-user-delete="true">Delete</button></div></td></tr>`).join('');
+  if (state.isAdmin) {
+    for (const user of users.filter((item) => !item.emailVerified && item.status === 'pending-verification')) {
+      const row = $$('[data-user-id]', table).find((item) => item.dataset.userId === user.id);
+      row?.querySelector('.admin-row-actions')?.insertAdjacentHTML('afterbegin', '<button type="button" data-resend-verification>Resend verification email</button>');
+    }
+  }
+  $$('[data-resend-verification]', table).forEach((button) => button.addEventListener('click', () => resendUserVerification(button)));
   $$('[data-user-action]', table).forEach((button) => button.addEventListener('click', () => updateUser(button.closest('[data-user-id]').dataset.userId, button.dataset.userAction)));
   $$('[data-webhook-access]', table).forEach((button) => button.addEventListener('click', () => updateWebhookAccess(button.closest('[data-user-id]').dataset.userId, button.dataset.webhookAccess === 'true')));
   $$('[data-community-updates]', table).forEach((button) => button.addEventListener('click', () => updateCommunityUpdates(button.closest('[data-user-id]').dataset.userId, button.dataset.communityUpdates === 'true')));
@@ -333,6 +340,21 @@ async function updateUser(id, status) {
     showMessage(`User status set to ${status}.`);
     await loadUsers();
   } catch (error) { showMessage(error.message, true); }
+}
+
+async function resendUserVerification(button) {
+  if (!state.isAdmin || button.disabled) return;
+  const id = button.closest('[data-user-id]').dataset.userId;
+  button.disabled = true;
+  button.textContent = 'Sending…';
+  try {
+    const result = await api(`/api/admin/accounts/${encodeURIComponent(id)}/resend-verification`, { method: 'POST' });
+    showMessage(result.message);
+  } catch (error) { showMessage(error.message, true); }
+  finally {
+    button.disabled = false;
+    button.textContent = 'Resend verification email';
+  }
 }
 
 async function updateWebhookAccess(id, suspended) {
@@ -422,7 +444,7 @@ function renderIncidents() {
   $$('[data-delete-incident]').forEach((button) => button.addEventListener('click', () => deleteIncident(button.dataset.deleteIncident)));
   $('#pending-incident-count').textContent = state.pending.length;
   const pendingList = $('#pending-incidents-list');
-  pendingList.innerHTML = state.pending.length ? state.pending.map((pending) => `<article class="admin-card"><div class="admin-card-meta"><span class="admin-badge pending-approval">PRIVATE · PENDING</span><span>${escapeHtml(pending.agency)} · ${escapeHtml(pending.borough)}</span><span>Expires ${escapeHtml(formatTime(pending.expiresAt))}</span></div><h3>${escapeHtml(pending.eventType || 'Unlocated report')}</h3><p>${escapeHtml(pending.summary)}</p>${pending.location ? `<p>Unverified location: ${escapeHtml(pending.location)}</p>` : '<p>No confidently geocoded address. Not shown publicly.</p>'}<div class="admin-card-actions"><button class="admin-icon-button approve" data-allow-pending="${escapeHtml(pending.id)}">Allow Pending</button><button class="admin-icon-button danger" data-discard-pending="${escapeHtml(pending.id)}">Discard pending</button></div></article>`).join('') : '<p class="admin-muted">No pending reports. Queue contents expire and are lost on service restart.</p>';
+  pendingList.innerHTML = state.pending.length ? state.pending.map((pending) => `<article class="admin-card"><div class="admin-card-meta"><span class="admin-badge pending-approval">PRIVATE · PENDING</span><span>${escapeHtml(pending.agency)} · ${escapeHtml(pending.borough)}</span><span>Expires ${escapeHtml(formatTime(pending.expiresAt))}</span></div><h3>${escapeHtml(pending.eventType || 'Unlocated report')}</h3><p>${escapeHtml(pending.summary)}</p>${pending.location ? `<p>Unverified location: ${escapeHtml(pending.location)}</p>` : '<p>No confidently geocoded address. Not shown publicly.</p>'}<div class="admin-card-actions"><button class="admin-icon-button approve" data-allow-pending="${escapeHtml(pending.id)}">Allow Pending</button><button class="admin-icon-button danger" data-discard-pending="${escapeHtml(pending.id)}">Discard pending</button></div></article>`).join('') : '<p class="admin-muted">No pending reports. Provisional reports persist across service restarts and remain available for two-hour reconciliation windows, extended when updated.</p>';
   $$('[data-allow-pending]').forEach((button) => button.addEventListener('click', () => allowPending(button.dataset.allowPending)));
   $$('[data-discard-pending]').forEach((button) => button.addEventListener('click', () => discardPending(button.dataset.discardPending)));
   if (!canEditIncidents()) {

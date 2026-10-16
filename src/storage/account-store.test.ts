@@ -9,6 +9,44 @@ const testDirectory = await mkdtemp(join(tmpdir(), 'nyc-accounts-'));
 after(async () => rm(testDirectory, { recursive: true, force: true }));
 
 describe('AccountStore', () => {
+  it('renews verification links with durable cooldowns, single use, and delivery-failure recovery', async () => {
+    const directory = join(testDirectory, 'resend-verification');
+    const store = new AccountStore(directory);
+    await store.init();
+    const registered = await store.register({ username: 'resend_user', firstName: 'Test', lastName: 'User', email: 'resend@example.test', phone: '2125550100', usageCase: 'Testing verification resend.', accountType: 'buff', password: 'Strong-test-password-123' });
+    await assert.rejects(store.resendVerificationEmail(registered.account.email, async () => { throw new Error('Mail unavailable'); }), /Mail unavailable/);
+    let token = '';
+    assert.equal(await store.resendVerificationEmail(' RESEND@example.test ', async (account, value) => {
+      assert.equal(account.id, registered.account.id);
+      token = value;
+      assert.equal(await store.resendVerificationEmail(account.email, async () => assert.fail('Concurrent delivery')), 'cooldown');
+    }), 'sent');
+    assert.notEqual(token, registered.verificationToken);
+    await assert.rejects(store.verifyEmail(registered.verificationToken), /invalid or expired/);
+    const reopened = new AccountStore(directory);
+    await reopened.init();
+    assert.equal(await reopened.resendVerificationEmail(registered.account.email, async () => assert.fail('Cooldown delivery')), 'cooldown');
+    assert.equal((await reopened.verifyEmail(token)).status, 'pending-approval');
+    await assert.rejects(reopened.verifyEmail(token), /invalid or expired/);
+    assert.equal(await reopened.resendVerificationEmail(registered.account.email, async () => assert.fail('Verified account')), 'ineligible');
+    assert.equal(await reopened.resendVerificationEmail('missing@example.test', async () => assert.fail('Missing account')), 'ineligible');
+
+    const suspended = await reopened.register({ username: 'suspended_resend', firstName: 'Test', lastName: 'User', email: 'suspended-resend@example.test', phone: '2125550100', usageCase: 'Testing suspended verification.', accountType: 'news', password: 'Strong-test-password-123' });
+    await reopened.updateAccount(suspended.account.id, { status: 'suspended' });
+    assert.equal(await reopened.resendVerificationEmail(suspended.account.email, async () => assert.fail('Suspended account')), 'ineligible');
+    await assert.rejects(reopened.verifyEmail(suspended.verificationToken), /invalid or expired/);
+    const invitation = await reopened.inviteAdministrator({ firstName: 'Staff', lastName: 'Test', email: 'staff-resend@example.test' });
+    assert.equal(await reopened.resendVerificationEmail(invitation.account.email, async () => assert.fail('Staff invitation')), 'ineligible');
+  });
+
+  it('keeps an existing verification link valid after a failed resend', async () => {
+    const store = new AccountStore(join(testDirectory, 'resend-failure'));
+    await store.init();
+    const registered = await store.register({ username: 'failure_resend', firstName: 'Test', lastName: 'User', email: 'resend-failure@example.test', phone: '2125550100', usageCase: 'Testing email delivery failure.', accountType: 'news', password: 'Strong-test-password-123' });
+    await assert.rejects(store.resendVerificationEmail(registered.account.email, async () => { throw new Error('Mail unavailable'); }));
+    assert.equal((await store.verifyEmail(registered.verificationToken)).status, 'pending-approval');
+  });
+
   it('requires email verification and administrator approval for Buff and News Media accounts', async () => {
     const store = new AccountStore(join(testDirectory, 'approval'));
     await store.init();

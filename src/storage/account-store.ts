@@ -45,11 +45,18 @@ export interface AccountRecord {
   passwordHash: string;
   verificationTokenHash?: string;
   verificationExpiresAt?: number;
+  verificationResentAt?: number;
   webhooks: AccountWebhook[];
   dashboardPreferences?: DashboardPreferences;
 }
 export interface PublicAccount { id: string; username: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: AccountRoleName; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhookSummary[]; webhookAccessSuspended: boolean; communityUpdatesSuspended: boolean; dashboardPreferences?: DashboardPreferences; }
 export interface AdminAccount extends PublicAccount { firstName: string; lastName: string; phone: string; usageCase: string; }
+
+export class EmailVerificationRequiredError extends Error {
+  constructor(readonly account: PublicAccount) {
+    super('Verify your email first. Check your inbox and spam folder.');
+  }
+}
 
 const passwordBytes = 64;
 const sessionLifetimeMs = 12 * 60 * 60 * 1000;
@@ -65,6 +72,7 @@ export class AccountStore {
   private persistQueue: Promise<void> = Promise.resolve();
   private readonly filePath: string;
   private initialized = false;
+  private readonly verificationResends = new Set<string>();
 
   constructor(dataDirectory: string) { this.filePath = join(dataDirectory, 'accounts.json'); }
 
@@ -110,7 +118,7 @@ export class AccountStore {
 
   async verifyEmail(token: string): Promise<PublicAccount> {
     const tokenHash = hashToken(token);
-    const account = this.accounts.find((item) => !item.isAdmin && item.verificationTokenHash === tokenHash && (item.verificationExpiresAt ?? 0) > Date.now());
+    const account = this.accounts.find((item) => !item.isAdmin && item.status === 'pending-verification' && item.verificationTokenHash === tokenHash && (item.verificationExpiresAt ?? 0) > Date.now());
     if (!account) throw new Error('This verification link is invalid or expired. Please register again or request a new link.');
     account.emailVerifiedAt = new Date().toISOString();
     delete account.verificationTokenHash;
@@ -120,6 +128,43 @@ export class AccountStore {
     return this.publicView(account);
   }
 
+  findAccountByEmail(email: string): PublicAccount | undefined {
+    const account = this.accounts.find((item) => item.email === email.trim().toLowerCase());
+    return account ? this.publicView(account) : undefined;
+  }
+
+  async resendVerificationEmail(email: string, send: (account: PublicAccount, token: string) => Promise<void>): Promise<'sent' | 'cooldown' | 'ineligible'> {
+    const account = this.accounts.find((item) => item.email === email.trim().toLowerCase());
+    if (!account || account.isAdmin || account.emailVerifiedAt || account.status !== 'pending-verification') return 'ineligible';
+    if (this.verificationResends.has(account.id) || Date.now() - (account.verificationResentAt ?? 0) < 60_000) return 'cooldown';
+    this.verificationResends.add(account.id);
+    const previous = { hash: account.verificationTokenHash, expiresAt: account.verificationExpiresAt, resentAt: account.verificationResentAt };
+    const token = randomBytes(32).toString('base64url');
+    const tokenHash = hashToken(token);
+    account.verificationTokenHash = tokenHash;
+    account.verificationExpiresAt = Date.now() + verifyLifetimeMs;
+    account.verificationResentAt = Date.now();
+    try {
+      await this.persist();
+      await send(this.publicView(account), token);
+      return 'sent';
+    } catch (error) {
+      // Keep the previous link usable if delivery fails; never undo a concurrent verification.
+      if (account.verificationTokenHash === tokenHash) {
+        if (previous.hash === undefined) delete account.verificationTokenHash;
+        else account.verificationTokenHash = previous.hash;
+        if (previous.expiresAt === undefined) delete account.verificationExpiresAt;
+        else account.verificationExpiresAt = previous.expiresAt;
+        if (previous.resentAt === undefined) delete account.verificationResentAt;
+        else account.verificationResentAt = previous.resentAt;
+        await this.persist();
+      }
+      throw error;
+    } finally {
+      this.verificationResends.delete(account.id);
+    }
+  }
+
   async login(emailInput: string, password: string): Promise<{ token: string; account: PublicAccount }> {
     const account = this.accounts.find((item) => item.email === emailInput.trim().toLowerCase());
     if (!account) {
@@ -127,8 +172,11 @@ export class AccountStore {
       throw new Error('Email or password is incorrect.');
     }
     if (!safeEqual(hashPassword(password, account.passwordSalt), account.passwordHash)) throw new Error('Email or password is incorrect.');
-    if (!account.emailVerifiedAt) throw new Error('Verify your email first. Check your inbox and spam folder.');
     if (account.status === 'suspended') throw new Error('This account is suspended.');
+    if (!account.emailVerifiedAt) {
+      if (!account.isAdmin && account.status === 'pending-verification') throw new EmailVerificationRequiredError(this.publicView(account));
+      throw new Error('Verify your email first. Check your inbox and spam folder.');
+    }
     if (account.status !== 'approved') throw new Error('Your account is awaiting administrator approval.');
     return this.createSession(account);
   }

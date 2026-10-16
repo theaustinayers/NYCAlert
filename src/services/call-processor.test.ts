@@ -90,6 +90,54 @@ describe('CallProcessor', () => {
     assert.equal(incidents[0]?.updates[0]?.location, '125-15 Luther Street', 'preserve the source wording in the timeline');
   });
 
+  it('restores a private provisional Box report after restart and attaches a later routine update', async () => {
+    const directory = join(testDirectory, 'durable-provisional-report');
+    const firstDashboard = new DashboardStore(false, 300, false, 100, new IncidentDatabase(directory));
+    await firstDashboard.init();
+    const firstProcessor = new CallProcessor(
+      {} as Client,
+      { listForCall: () => [] } as unknown as SubscriptionStore,
+      { async transcribe() { throw new Error('Transcript supplied'); }, async triage() {
+        return { shouldAlert: true, category: 'newsworthy', headline: 'Reported Fire', summary: 'Smoke reported at the Box location.', location: '125-15 Lucas Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 3, buffInterestScore: 4 };
+      } },
+      firstDashboard,
+      false, 0.78, 4, { async geocode() { return undefined; } }
+    );
+    const occurredAt = new Date(Date.now() - 60 * 60_000);
+    await firstProcessor.process({ id: 'durable-provisional-initial', agency: 'FDNY', borough: 'Queens', occurredAt, transcript: 'Box 5758, smoke reported at 125-15 Lucas Street.' });
+    assert.equal(firstProcessor.listPendingIncidents().length, 1);
+    firstDashboard.close();
+
+    const reopenedDashboard = new DashboardStore(false, 300, false, 100, new IncidentDatabase(directory));
+    await reopenedDashboard.init();
+    const secondProcessor = new CallProcessor(
+      {} as Client,
+      { listForCall: () => [] } as unknown as SubscriptionStore,
+      { async transcribe() { throw new Error('Transcript supplied'); }, async triage() {
+        return { shouldAlert: false, category: 'routine', headline: 'Fire Under Control', summary: 'Fire under control; secondary searches negative.', location: '125-15 Lucas Street', incidentType: 'other', confidence: 0.8, newsworthinessScore: 1 };
+      } },
+      reopenedDashboard,
+      false, 0.78, 4, { async geocode() { return undefined; } }
+    );
+    await secondProcessor.process({ id: 'durable-provisional-followup', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(occurredAt.getTime() + 45 * 60_000), transcript: 'Box 5758, fire under control; secondary searches negative at 125-15 Lucas Street.' });
+
+    const pending = secondProcessor.listPendingIncidents();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]?.location, '125-15 Lucas Street');
+    assert.match(pending[0]?.summary ?? '', /secondary searches negative/);
+    assert.ok(Date.parse(pending[0]!.expiresAt) > Date.now() + 60 * 60_000);
+    assert.equal(reopenedDashboard.search().length, 0, 'private provisional updates do not publish incidents');
+    const publish = reopenedDashboard.publish;
+    reopenedDashboard.publish = async () => { throw new Error('Simulated publication failure'); };
+    await assert.rejects(secondProcessor.allowPendingIncident(pending[0]!.id), /Simulated publication failure/);
+    assert.equal(secondProcessor.listPendingIncidents().length, 1);
+    assert.equal(reopenedDashboard.listPendingReports().length, 1, 'failed publication retains the durable report');
+    reopenedDashboard.publish = publish;
+    assert.equal(secondProcessor.discardPendingIncident(pending[0]!.id), true);
+    assert.equal(reopenedDashboard.listPendingReports().length, 0, 'discard removes the durable report');
+    reopenedDashboard.close();
+  });
+
   it('matches a recent published incident after the processor is recreated, including routine follow-up', async () => {
     const databaseDirectory = join(testDirectory, 'processor-restart-correlation');
     const dashboard = new DashboardStore(false, 300, false, 100, new IncidentDatabase(databaseDirectory));

@@ -5,7 +5,7 @@ import type { Agency, Borough } from '../domain/subscriptions.js';
 import type { CallType } from '../domain/call-type.js';
 import type { AlertCategory, IncidentType, RadioUnitAssignment } from '../domain/triage.js';
 import type { LocationPrecision } from '../domain/location.js';
-import type { CommunityIncidentNote, DashboardIncident } from '../services/dashboard-store.js';
+import type { CommunityIncidentNote, DashboardIncident, DashboardPendingIncident } from '../services/dashboard-store.js';
 
 interface IncidentRow {
   id: string;
@@ -138,6 +138,12 @@ const schema = `
     content_type TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS incident_audio_path_idx ON incident_audio(path);
+  CREATE TABLE IF NOT EXISTS provisional_incidents (
+    id TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS provisional_incidents_expiry_idx ON provisional_incidents(expires_at);
   CREATE VIRTUAL TABLE IF NOT EXISTS incidents_fts USING fts5(incident_id UNINDEXED, title, summary, location, units, boxes, tokenize='unicode61 remove_diacritics 2');
 `;
 
@@ -242,6 +248,25 @@ export class IncidentDatabase {
 
   hasIncidentAudioReference(path: string): boolean {
     return Boolean(this.getDatabase().prepare('SELECT 1 FROM incident_audio WHERE path = ? LIMIT 1').get(path));
+  }
+
+  listProvisionalIncidents(): DashboardPendingIncident[] {
+    const rows = this.getDatabase().prepare('SELECT payload_json FROM provisional_incidents ORDER BY expires_at DESC').all() as Array<{ payload_json: string }>;
+    return rows.map((row) => JSON.parse(row.payload_json) as DashboardPendingIncident);
+  }
+
+  upsertProvisionalIncident(incident: DashboardPendingIncident): void {
+    this.getDatabase().prepare(`INSERT INTO provisional_incidents (id, payload_json, expires_at) VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, expires_at = excluded.expires_at`)
+      .run(incident.id, JSON.stringify(incident), incident.expiresAt);
+  }
+
+  deleteProvisionalIncident(id: string): boolean {
+    return this.getDatabase().prepare('DELETE FROM provisional_incidents WHERE id = ?').run(id).changes > 0;
+  }
+
+  deleteExpiredProvisionalIncidents(now: number): number {
+    return this.getDatabase().prepare('DELETE FROM provisional_incidents WHERE expires_at <= ?').run(now).changes;
   }
 
   addCommunityNote(incidentId: string, note: CommunityIncidentNote): void {

@@ -13,10 +13,12 @@ import { logger } from '../logger.js';
 import { extractActingAsAssignments, extractBoxNumbers, extractUnitIds, fdnyFollowupEvidence, isSameIncident, type IncidentIdentity } from './incident-correlation.js';
 import { RecentRepeatDetector } from './repeat-detection.js';
 import type { SubscriptionStore } from '../storage/subscription-store.js';
-import type { DashboardStore, DashboardIncident } from './dashboard-store.js';
+import type { DashboardStore, DashboardIncident, DashboardPendingIncident } from './dashboard-store.js';
 import { LearningLog, type LearningEvent, type LearningWorkflowStage } from './learning-log.js';
 import type { SourceCallLedger } from './source-call-ledger.js';
 import type { IncidentWebhookDelivery, WebhookAudience } from '../providers/webhook-delivery.js';
+
+const pendingReportRetentionMs = 2 * 60 * 60 * 1000;
 
 const nonSpeechPlaceholders = new Set([
   '', 'silence', 'blank audio', 'inaudible', 'no speech',
@@ -56,22 +58,7 @@ interface TrackedIncident {
   messages: Array<{ channelId: string; messageId: string }>;
 }
 
-interface PendingIncident {
-  id: string;
-  eventId: string;
-  callId: string;
-  workflowPath: string[];
-  identity: IncidentIdentity;
-  headline?: string;
-  summary: string;
-  category: CallTriage['category'];
-  confidence: number;
-  newsworthinessScore: number;
-  buffInterestScore: number;
-  assignmentDeskScore: number;
-  unitAssignments: ReturnType<typeof extractActingAsAssignments>;
-  expiresAt: number;
-}
+type PendingIncident = DashboardPendingIncident;
 
 interface LearningTrace {
   eventId: string;
@@ -93,7 +80,7 @@ interface LearningTrace {
 export class CallProcessor {
   private readonly repeatDetector = new RecentRepeatDetector();
   private readonly trackedIncidents: TrackedIncident[] = [];
-  private readonly pendingIncidents: PendingIncident[] = [];
+  private readonly pendingIncidents: PendingIncident[];
   private readonly pendingCleanupTimer = setInterval(() => this.prunePendingIncidents(Date.now()), 60_000).unref();
 
   constructor(
@@ -113,7 +100,10 @@ export class CallProcessor {
     private readonly xPostDelayMs = 60_000,
     private readonly sourceCallLedger?: SourceCallLedger,
     private readonly webhookDelivery?: IncidentWebhookDelivery
-  ) {}
+  ) {
+    this.pendingIncidents = dashboard.listPendingReports();
+    this.prunePendingIncidents(Date.now());
+  }
 
   listPendingIncidents(): Array<{ id: string; agency: RadioCall['agency']; borough: RadioCall['borough']; eventType?: CallTriage['incidentType']; summary: string; location?: string; createdAt: string; expiresAt: string }> {
     this.prunePendingIncidents(Date.now());
@@ -134,6 +124,7 @@ export class CallProcessor {
     if (index < 0) return false;
     const [pending] = this.pendingIncidents.splice(index, 1);
     if (pending) {
+      this.dashboard.deletePendingReport(pending.id);
       pending.workflowPath.push('pending-discarded');
       this.learningLog.record({
         eventId: pending.eventId,
@@ -153,7 +144,7 @@ export class CallProcessor {
   async allowPendingIncident(id: string): Promise<{ incidentId: string } | undefined> {
     const index = this.pendingIncidents.findIndex((pending) => pending.id === id);
     if (index < 0) return undefined;
-    const [pending] = this.pendingIncidents.splice(index, 1);
+    const pending = this.pendingIncidents[index];
     if (!pending) return undefined;
     const incident = await this.dashboard.publish({
       title: pending.headline || pending.summary,
@@ -176,6 +167,9 @@ export class CallProcessor {
     const buffQualified = pending.category !== 'routine' && pending.confidence >= this.minTriageConfidence && pending.buffInterestScore >= this.minBuffInterest;
     const newsQualified = pending.category !== 'routine' && pending.confidence >= this.minTriageConfidence && pending.assignmentDeskScore >= this.minNewsMediaDesk;
     this.scheduleWebhookDelivery(incident, 'incident.created', qualifiedWebhookAudiences(buffQualified, newsQualified), pending.callId);
+    const currentIndex = this.pendingIncidents.indexOf(pending);
+    if (currentIndex >= 0) this.pendingIncidents.splice(currentIndex, 1);
+    this.dashboard.deletePendingReport(pending.id);
     pending.workflowPath.push('pending-approved');
     this.learningLog.record({
       eventId: pending.eventId,
@@ -470,17 +464,9 @@ export class CallProcessor {
 
     if (unresolvedBoroughConflict) {
       if (qualifiesAsIncident && triage.category !== 'routine') {
-        const pendingMatches = this.pendingIncidents.filter((pending) => isSameIncident(pending.identity, identity));
+        const pendingMatches = this.findPendingMatches(identity);
         if (pendingMatches.length === 1) {
-          const pending = pendingMatches[0]!;
-          pending.identity = {
-            ...pending.identity,
-            eventDescription: `${pending.identity.eventDescription ?? ''} ${identity.eventDescription ?? ''}`.trim(),
-            unitIds: [...new Set([...pending.identity.unitIds, ...unitIds])],
-            boxNumbers: [...new Set([...(pending.identity.boxNumbers ?? []), ...boxNumbers])]
-          };
-          pending.summary = `${pending.summary} ${triage.summary}`.slice(0, 1_200);
-          pending.expiresAt = Math.max(pending.expiresAt, Date.now() + 30 * 60 * 1000);
+          this.updatePendingFromFollowup(pendingMatches[0]!, identity, triage, unitAssignments, call);
         } else if (pendingMatches.length === 0) {
           this.enqueuePendingIncident({ identity, triage, unitAssignments, call, trace });
         } else {
@@ -495,7 +481,7 @@ export class CallProcessor {
       return 'processed';
     }
 
-    const pendingCandidates = this.pendingIncidents.filter((pending) => isSameIncident(pending.identity, identity));
+    const pendingCandidates = this.findPendingMatches(identity);
     if ((!qualifiesAsIncident || triage.category === 'routine') && pendingCandidates.length === 1) {
       const pending = pendingCandidates[0]!;
       this.updatePendingFromFollowup(pending, identity, triage, unitAssignments, call);
@@ -514,17 +500,9 @@ export class CallProcessor {
     }
     const locationUnverified = Boolean(this.geocoder && !coordinates);
     if (!triage.location || locationUnverified || unresolvedBoroughConflict) {
-      const pendingMatches = this.pendingIncidents.filter((pending) => isSameIncident(pending.identity, identity));
+      const pendingMatches = this.findPendingMatches(identity);
       if (pendingMatches.length === 1) {
-        const pending = pendingMatches[0]!;
-        pending.identity = {
-          ...pending.identity,
-          eventDescription: `${pending.identity.eventDescription} ${identity.eventDescription}`.trim(),
-          unitIds: [...new Set([...pending.identity.unitIds, ...unitIds])],
-          boxNumbers: [...new Set([...(pending.identity.boxNumbers ?? []), ...boxNumbers])]
-        };
-        pending.summary = `${pending.summary} ${triage.summary}`.slice(0, 1_200);
-        pending.expiresAt = Math.max(pending.expiresAt, Date.now() + 30 * 60 * 1000);
+        this.updatePendingFromFollowup(pendingMatches[0]!, identity, triage, unitAssignments, call);
       } else {
         this.enqueuePendingIncident({ identity, triage, unitAssignments, call, trace });
       }
@@ -539,10 +517,9 @@ export class CallProcessor {
       this.recordLearning(call, trace, 'incident-suppressed', { disposition: 'repeated-incident-alert' });
       return 'processed';
     }
-    const pendingMatches = this.pendingIncidents.filter((pending) => isSameIncident(pending.identity, identity));
+    const pendingMatches = this.findPendingMatches(identity);
     const matchingPending = pendingMatches.length === 1 ? pendingMatches[0] : undefined;
     if (pendingMatches.length > 1) logger.warn({ callId: call.id, candidates: pendingMatches.length }, 'Ambiguous pending reports left unmerged');
-    if (matchingPending) this.pendingIncidents.splice(this.pendingIncidents.indexOf(matchingPending), 1);
 
     let incidentCall = call;
     if (!incidentCall.audioPath && loadIncidentAudio) {
@@ -605,6 +582,9 @@ export class CallProcessor {
         category: triage.category
       });
       if (attached) {
+        this.dashboard.deletePendingReport(matchingPending.id);
+        const pendingIndex = this.pendingIncidents.indexOf(matchingPending);
+        if (pendingIndex >= 0) this.pendingIncidents.splice(pendingIndex, 1);
         incident = attached;
         tracked.identity.unitIds = [...new Set([...tracked.identity.unitIds, ...matchingPending.identity.unitIds])];
         tracked.identity.boxNumbers = [...new Set([...(tracked.identity.boxNumbers ?? []), ...(matchingPending.identity.boxNumbers ?? [])])];
@@ -796,10 +776,12 @@ export class CallProcessor {
   }
 
   private prunePendingIncidents(now: number): void {
+    this.dashboard.deleteExpiredPendingReports(now);
     for (let index = this.pendingIncidents.length - 1; index >= 0; index -= 1) {
       const pending = this.pendingIncidents[index]!;
       if (pending.expiresAt <= now) {
         this.pendingIncidents.splice(index, 1);
+        this.dashboard.deletePendingReport(pending.id);
         pending.workflowPath.push('pending-expired');
         this.learningLog.record({
           eventId: pending.eventId,
@@ -810,7 +792,7 @@ export class CallProcessor {
           workflowPath: [...pending.workflowPath],
           agency: pending.identity.agency,
           feedBorough: pending.identity.borough,
-          disposition: 'expired-unmatched-after-30-minutes'
+          disposition: 'expired-unmatched-after-two-hours'
         });
       }
     }
@@ -837,9 +819,13 @@ export class CallProcessor {
       buffInterestScore: input.triage.buffInterestScore ?? input.triage.newsworthinessScore,
       assignmentDeskScore: input.triage.assignmentDeskScore ?? input.triage.newsworthinessScore,
       unitAssignments: input.unitAssignments,
-      expiresAt: Date.now() + 30 * 60 * 1000
+      expiresAt: Date.now() + pendingReportRetentionMs
     });
-    this.pendingIncidents.length = Math.min(this.pendingIncidents.length, 300);
+    this.dashboard.savePendingReport(this.pendingIncidents[0]!);
+    while (this.pendingIncidents.length > 300) {
+      const removed = this.pendingIncidents.pop();
+      if (removed) this.dashboard.deletePendingReport(removed.id);
+    }
   }
 
   private updatePendingFromFollowup(
@@ -857,8 +843,9 @@ export class CallProcessor {
     };
     pending.summary = `${pending.summary} Follow-up: ${triage.summary}`.slice(0, 1_200);
     pending.unitAssignments = [...pending.unitAssignments, ...unitAssignments].slice(-24);
-    pending.expiresAt = Math.max(pending.expiresAt, Date.now() + 30 * 60 * 1000);
+    pending.expiresAt = Math.max(pending.expiresAt, Date.now() + pendingReportRetentionMs);
     pending.workflowPath.push('pending-updated');
+    this.dashboard.savePendingReport(pending);
     this.learningLog.record({
       eventId: pending.eventId,
       callId: pending.callId,
@@ -870,6 +857,10 @@ export class CallProcessor {
       feedBorough: pending.identity.borough,
       disposition: 'matched-private-provisional-report'
     });
+  }
+
+  private findPendingMatches(identity: IncidentIdentity): PendingIncident[] {
+    return this.pendingIncidents.filter((pending) => isSameIncident(pending.identity, identity, pendingReportRetentionMs));
   }
 
   private async editTrackedMessages(incident: TrackedIncident, embed: EmbedBuilder): Promise<void> {

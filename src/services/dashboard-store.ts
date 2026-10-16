@@ -6,6 +6,7 @@ import { canShowMapMarker, type LocationPrecision } from '../domain/location.js'
 import { isGenericIncidentHeadline, normalizeIncidentHeadline, type AlertCategory, type IncidentType, type RadioUnitAssignment } from '../domain/triage.js';
 import type { BroadcastifyFeedStatus } from '../providers/broadcastify.js';
 import type { IncidentDatabase } from '../storage/incident-database.js';
+import type { IncidentIdentity } from './incident-correlation.js';
 
 export interface DashboardIncidentInput {
   title: string;
@@ -644,6 +645,26 @@ export class DashboardStore {
       .map((incident) => this.withAudioAvailability(incident));
   }
 
+  listPendingReports(): DashboardPendingIncident[] {
+    return this.incidentDatabase?.listProvisionalIncidents() ?? [];
+  }
+
+  hasPersistentPendingReports(): boolean {
+    return Boolean(this.incidentDatabase);
+  }
+
+  savePendingReport(report: DashboardPendingIncident): void {
+    this.incidentDatabase?.upsertProvisionalIncident(report);
+  }
+
+  deletePendingReport(id: string): void {
+    this.incidentDatabase?.deleteProvisionalIncident(id);
+  }
+
+  deleteExpiredPendingReports(now: number): void {
+    this.incidentDatabase?.deleteExpiredProvisionalIncidents(now);
+  }
+
   getAudio(_incidentId: string): { path: string; contentType: string } | undefined {
     return this.allowPublicAudio ? this.audioFiles.get(_incidentId) : undefined;
   }
@@ -724,4 +745,21 @@ function stripActingAsTarget(text: string): string {
 
 function normalizeBoxNumbers(boxNumbers: readonly string[]): string[] {
   return [...new Set(boxNumbers.map((box) => box.trim().toUpperCase().replace(/^BOX\s*/, '').replace(/\D/g, '')).filter((box) => /^\d{3,5}$/.test(box)).map((box) => `BOX ${box}`))].slice(0, 4);
+}
+
+export interface DashboardPendingIncident {
+  id: string;
+  eventId: string;
+  callId: string;
+  workflowPath: string[];
+  identity: IncidentIdentity;
+  headline?: string;
+  summary: string;
+  category: AlertCategory | 'routine';
+  confidence: number;
+  newsworthinessScore: number;
+  buffInterestScore: number;
+  assignmentDeskScore: number;
+  unitAssignments: RadioUnitAssignment[];
+  expiresAt: number;
 }

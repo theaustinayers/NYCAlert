@@ -116,7 +116,8 @@ client.once(Events.ClientReady, async (readyClient) => {
     dashboard.setPendingIncidentAdminHandlers(
       () => processor.listPendingIncidents(),
       (pendingId) => processor.discardPendingIncident(pendingId),
-      (pendingId) => processor.allowPendingIncident(pendingId)
+      (pendingId) => processor.allowPendingIncident(pendingId),
+      dashboardStore.hasPersistentPendingReports()
     );
     if (config.callsEnabled || config.liveEnabled) {
       const audioRetriever = new BroadcastifyAudioRetriever({

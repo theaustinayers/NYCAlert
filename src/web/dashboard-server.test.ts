@@ -278,13 +278,13 @@ describe('DashboardServer account routes', () => {
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
-      assert.match(html, /\/admin\.js\?v=admin-community-updates-suspension-20261016-1/);
+      assert.match(html, /\/admin\.js\?v=verification-resend-20261016-1/);
       assert.match(html, /id="update-website"/);
       const wordmark = await fetch(`${origin}/nyc-alert-wordmark.svg`);
       assert.equal(wordmark.status, 200);
       assert.match(wordmark.headers.get('content-type') ?? '', /image\/svg\+xml/);
       assert.match(await wordmark.text(), /NYC Alert/);
-      const script = await fetch(`${origin}/admin.js?v=admin-community-updates-suspension-20261016-1`);
+      const script = await fetch(`${origin}/admin.js?v=verification-resend-20261016-1`);
       assert.equal(script.status, 200);
       assert.equal(script.headers.get('cache-control'), 'no-store');
       const adminScript = await script.text();
@@ -377,6 +377,67 @@ describe('DashboardServer account routes', () => {
     } finally {
       await server.stop();
     }
+  });
+
+  it('resends verification from admin, login, and registration without bypassing account approval', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const accounts = new AccountStore(join(testDirectory, 'verification-resend-routes'));
+    await accounts.init();
+    const input = { username: 'resend_routes', firstName: 'Test', lastName: 'User', email: 'resend-routes@example.test', phone: '2125550100', usageCase: 'Testing verification resend routes.', accountType: 'buff' as const, password: 'Strong-test-password-123' };
+    const registered = await accounts.register(input);
+    const messages: Array<{ to: string; text: string }> = [];
+    let failMail = false;
+    const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
+      publicUrl: origin, trustProxy: true, sendEmail: async (message) => {
+        if (failMail) throw new Error('Mail unavailable');
+        messages.push(message);
+      }
+    });
+    await server.start();
+    const post = (path: string, body: unknown = {}, cookie = '', requestOrigin = origin) => fetch(`${origin}${path}`, {
+      method: 'POST', headers: { Origin: requestOrigin, Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    try {
+      const endpoint = `/api/admin/accounts/${registered.account.id}/resend-verification`;
+      assert.equal((await post(endpoint)).status, 401);
+      const adminCookie = `nycalert_session=${accounts.createAdminSession()}`;
+      assert.equal((await post(endpoint, {}, adminCookie, 'https://attacker.example')).status, 403);
+      const invitation = await accounts.inviteAdministrator({ firstName: 'Mod', lastName: 'Test', email: 'resend-mod@example.test', role: 'moderator' });
+      const mod = await accounts.completeAdminInvitation(invitation.invitationToken, 'Strong-moderator-password-123', 'resend_mod');
+      assert.equal((await post(endpoint, {}, `nycalert_session=${mod.token}`)).status, 403);
+      assert.equal((await post('/api/auth/login', { email: input.email, password: 'wrong-password' })).status, 401);
+      assert.equal(messages.length, 0);
+      const login = await post('/api/auth/login', { email: input.email.toUpperCase(), password: input.password });
+      assert.equal(login.status, 403);
+      assert.match((await login.json() as { error: string }).error, /new verification email was sent/);
+      assert.equal(login.headers.get('set-cookie'), null);
+      assert.equal(messages.length, 1);
+      const token = new URLSearchParams(new URL(messages[0]!.text.match(/Verify email: (\S+)/)![1]!).hash.slice(1)).get('verify')!;
+      assert.equal((await post(endpoint, {}, adminCookie)).status, 429);
+      const resend = await post('/api/auth/resend-verification', { email: input.email });
+      const missing = await post('/api/auth/resend-verification', { email: 'missing@example.test' });
+      assert.equal(resend.status, 200);
+      assert.deepEqual(await resend.json(), await missing.json());
+      assert.equal((await post('/api/auth/register', { ...input, username: 'do_not_replace', password: 'Different-password-123' })).status, 201);
+      assert.equal(accounts.findAccountByEmail(input.email)?.username, input.username);
+      assert.equal(messages.length, 1);
+      assert.equal((await post('/api/auth/verify', { token })).status, 200);
+      assert.equal((await post('/api/auth/login', { email: input.email, password: input.password })).status, 401);
+      assert.equal(accounts.findAccountByEmail(input.email)?.status, 'pending-approval');
+      assert.equal((await post(endpoint, {}, adminCookie)).status, 409);
+
+      const second = await accounts.register({ ...input, username: 'admin_resend', email: 'admin-resend@example.test' });
+      assert.equal((await post(`/api/admin/accounts/${second.account.id}/resend-verification`, {}, adminCookie)).status, 200);
+      const thirdInput = { ...input, username: 'register_resend', email: 'register-resend@example.test' };
+      await accounts.register(thirdInput);
+      assert.equal((await post('/api/auth/register', thirdInput)).status, 201);
+      assert.equal(messages.length, 3);
+      const fourth = await accounts.register({ ...input, username: 'failed_resend', email: 'failed-resend@example.test' });
+      failMail = true;
+      assert.equal((await post(`/api/admin/accounts/${fourth.account.id}/resend-verification`, {}, adminCookie)).status, 503);
+      assert.equal((await accounts.verifyEmail(fourth.verificationToken)).status, 'pending-approval');
+    } finally { await server.stop(); }
   });
 
   it('restricts settings, analytics, webhooks, and staff data to admin roles, not moderators', async () => {
