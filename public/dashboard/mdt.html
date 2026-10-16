@@ -3,14 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#07100e">
+  <meta name="theme-color" content="#aeb4af">
   <meta name="robots" content="noindex,nofollow">
   <meta name="description" content="NYC Alert incident operations view. Simulation interface using published incident information.">
   <title>MDT Incident View — NYC Alert</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg">
   <link rel="stylesheet" href="/mdt.css">
+  <link rel="stylesheet" href="/mdt-retro.css">
   <link rel="stylesheet" href="/mdt-pagination.css">
-  <script src="/mdt.js?v=mdt-live-incidents-20261015-1" defer></script>
+  <script src="/mdt.js?v=mdt-retro-20261015-2" defer></script>
 </head>
 <body>
   <main class="mdt-shell">
@@ -59,6 +60,9 @@
           <h2>DATA NOTICE</h2>
           <p>Published incidents and their updates only. This view does not display Live Radio traffic, raw transcripts, or dispatch commands. NYC Alert is not an official FDNY system.</p>
         </section>
+        <div class="rail-elapsed" aria-label="Time since last published incident">
+          <time id="mdt-last-incident-age">—</time>
+        </div>
       </aside>
 
       <section class="mdt-main" aria-label="Live published incident stream">

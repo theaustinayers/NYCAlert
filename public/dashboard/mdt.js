@@ -2,6 +2,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const state = {
   incidents: [],
+  latestIncidentAt: null,
   view: 'all',
   callType: 'all',
   borough: 'all',
@@ -37,6 +38,37 @@ function formatStamp(value) {
   return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(date);
 }
 
+function updateLastIncidentAge() {
+  const display = $('#mdt-last-incident-age');
+  if (!state.latestIncidentAt) {
+    display.textContent = '—';
+    display.removeAttribute('datetime');
+    display.setAttribute('aria-label', 'No published incidents');
+    return;
+  }
+  const elapsedMinutes = Math.floor(Math.max(0, Date.now() - Date.parse(state.latestIncidentAt)) / 60_000);
+  display.textContent = `${elapsedMinutes} min`;
+  display.dateTime = state.latestIncidentAt;
+  display.setAttribute('aria-label', `${elapsedMinutes} minutes since last published incident`);
+}
+
+async function refreshLatestIncident(incidents) {
+  try {
+    let latestIncidents = incidents;
+    if (!latestIncidents) {
+      const response = await fetch('/api/v1/incidents?limit=100&offset=0', { cache: 'no-store' });
+      if (!response.ok) return;
+      const result = await response.json();
+      latestIncidents = Array.isArray(result.data) ? result.data : [];
+    }
+    const timestamps = latestIncidents.map((incident) => Date.parse(incident.occurredAt)).filter(Number.isFinite);
+    state.latestIncidentAt = timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null;
+    updateLastIncidentAge();
+  } catch {
+    // Keep the last known incident time if the feed is temporarily unavailable.
+  }
+}
+
 function incidentSignature(incidents) {
   return incidents.map((incident) => `${incident.id}:${incident.updatedAt}:${incident.updateCount}`).join('|');
 }
@@ -54,6 +86,8 @@ async function loadIncidents({ announce = false, append = false } = {}) {
     if (!response.ok) throw new Error(`Incident API returned ${response.status}`);
     const result = await response.json();
     const incidents = Array.isArray(result.data) ? result.data : [];
+    const unfiltered = state.callType === 'all' && state.borough === 'all' && !state.query;
+    void refreshLatestIncident(unfiltered ? incidents : undefined);
     const signature = incidentSignature(incidents);
     if (announce && !append && state.lastSignature && signature !== state.lastSignature) state.changeCount += 1;
     if (append) {
@@ -222,6 +256,8 @@ function resetIncidentHistory() {
 wireControls();
 updateClock();
 setInterval(updateClock, 1000);
+updateLastIncidentAge();
+setInterval(updateLastIncidentAge, 1000);
 connectEvents();
 void loadIncidents();
 state.refreshTimer = setInterval(() => { if (document.visibilityState === 'visible') void loadIncidents({ announce: true }); }, 30_000);

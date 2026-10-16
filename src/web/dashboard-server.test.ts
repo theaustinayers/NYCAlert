@@ -118,20 +118,26 @@ describe('DashboardServer account routes', () => {
       assert.match(html, /INCIDENT OPERATIONS VIEW/);
       assert.match(html, /SIMULATION · PUBLIC INCIDENT DATA/);
       assert.match(html, /id="incident-stream"/);
+      assert.match(html, /id="mdt-last-incident-age"/);
       assert.match(html, /data-view="all"/);
       assert.match(html, /not an official FDNY system/);
       assert.match(html, /does not display Live Radio traffic, raw transcripts/);
       const stylesheet = await fetch(`${origin}/mdt.css`);
       assert.equal(stylesheet.status, 200);
       assert.match(await stylesheet.text(), /\.incident-stream/);
+      const retroStyles = await fetch(`${origin}/mdt-retro.css`);
+      assert.equal(retroStyles.status, 200);
+      assert.match(await retroStyles.text(), /background:#030605/);
       const paginationStyles = await fetch(`${origin}/mdt-pagination.css`);
       assert.equal(paginationStyles.status, 200);
       assert.match(await paginationStyles.text(), /\.stream-pagination/);
-      const script = await fetch(`${origin}/mdt.js?v=mdt-live-incidents-20261015-1`);
+      const script = await fetch(`${origin}/mdt.js?v=mdt-retro-20261015-2`);
       assert.equal(script.status, 200);
       const source = await script.text();
       assert.match(source, /incidents-updated/);
       assert.match(source, /\/api\/v1\/incidents/);
+      assert.match(source, /updateLastIncidentAge/);
+      assert.match(source, /refreshLatestIncident/);
       assert.match(source, /loadOlderIncidents/);
       assert.doesNotMatch(source, /\/api\/live-calls/);
     } finally { await server.stop(); }
