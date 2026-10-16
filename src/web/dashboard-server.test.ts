@@ -118,6 +118,8 @@ describe('DashboardServer account routes', () => {
       assert.match(html, /INCIDENT OPERATIONS VIEW/);
       assert.match(html, /SIMULATION · PUBLIC INCIDENT DATA/);
       assert.match(html, /id="incident-stream"/);
+      assert.match(html, /Copyright \(c\) 1989 - 2007/);
+      assert.match(html, /Licensed to: City of New York Fire Department EMSCAD/);
       assert.match(html, /id="mdt-last-incident-age"/);
       assert.match(html, /data-view="all"/);
       assert.match(html, /not an official FDNY system/);
@@ -138,6 +140,8 @@ describe('DashboardServer account routes', () => {
       assert.match(source, /\/api\/v1\/incidents/);
       assert.match(source, /updateLastIncidentAge/);
       assert.match(source, /refreshLatestIncident/);
+      assert.match(source, /Math\.random\(\) \* 2001/);
+      assert.match(source, /if \(!state\.started\) return/);
       assert.match(source, /loadOlderIncidents/);
       assert.doesNotMatch(source, /\/api\/live-calls/);
     } finally { await server.stop(); }

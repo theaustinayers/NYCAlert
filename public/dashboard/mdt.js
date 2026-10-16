@@ -3,6 +3,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 const state = {
   incidents: [],
   latestIncidentAt: null,
+  started: false,
   view: 'all',
   callType: 'all',
   borough: 'all',
@@ -74,6 +75,7 @@ function incidentSignature(incidents) {
 }
 
 async function loadIncidents({ announce = false, append = false } = {}) {
+  if (!state.started) return;
   const offset = append ? state.nextOffset : 0;
   const params = new URLSearchParams({ limit: '100', offset: String(offset) });
   if (state.callType !== 'all') params.set('callType', state.callType);
@@ -258,7 +260,13 @@ updateClock();
 setInterval(updateClock, 1000);
 updateLastIncidentAge();
 setInterval(updateLastIncidentAge, 1000);
-connectEvents();
-void loadIncidents();
-state.refreshTimer = setInterval(() => { if (document.visibilityState === 'visible') void loadIncidents({ announce: true }); }, 30_000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void loadIncidents(); });
+const startupDelayMs = 3000 + Math.floor(Math.random() * 2001);
+setTimeout(() => {
+  state.started = true;
+  connectEvents();
+  void loadIncidents();
+  state.refreshTimer = setInterval(() => { if (document.visibilityState === 'visible') void loadIncidents({ announce: true }); }, 30_000);
+}, startupDelayMs);
+document.addEventListener('visibilitychange', () => {
+  if (state.started && document.visibilityState === 'visible') void loadIncidents();
+});

@@ -31,4 +31,5 @@ html,body{background:#858c87;color:#171b19;font-family:var(--mono)}
 @media(max-width:430px){.mdt-topbar{flex-wrap:wrap}.mdt-clock-wrap{order:3;width:auto;flex:1}.simulation-label{display:none}.mdt-brand small{font-size:7px}.mdt-command-bar{min-height:45px}.command-button{min-width:65px;height:44px;padding:4px 5px;font-size:8px}.mdt-search{padding:0 4px}.mdt-search input{width:92px;font-size:9px}.mdt-rail{grid-template-columns:1fr 1fr}.mdt-footer{flex-direction:column}}
 .rail-elapsed{display:grid;min-height:65px;place-items:center;margin-top:2px;border:2px solid var(--edge);background:#f4ed00;color:#e00000;font:700 18px var(--mono);letter-spacing:.02em}
 .rail-elapsed time{font:inherit}
+.mdt-startup{margin:0;padding:4px;white-space:pre-wrap;color:#f0f0f0;font:700 clamp(12px,2vw,22px)/1.15 var(--mono)}
 @media(max-width:760px){.rail-elapsed{grid-column:1/-1;min-height:48px}}
