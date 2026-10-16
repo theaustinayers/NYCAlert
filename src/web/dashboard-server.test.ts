@@ -109,12 +109,12 @@ describe('DashboardServer account routes', () => {
       const emscadStylesText = await emscadStyles.text();
       assert.match(emscadStylesText, /grid-template-columns:1\.3fr/);
       assert.match(emscadStylesText, /\.status-xmit/);
-      assert.match(emscadStylesText, /\.mdt-status\.composer-visible>span:first-child\{display:none\}/);
-      assert.match(emscadStylesText, /\.mdt-status\.composer-visible>span:first-child\{display:none\}/);
+      assert.match(emscadStylesText, /\.mdt-status\.composer-visible>span:first-child\{visibility:hidden\}/);
       assert.match(emscadStylesText, /\.mdt-status\{grid-column:1\/-1;grid-row:2;display:flex/);
-      assert.match(emscadStylesText, /\.status-xmit\{order:2/);
-      assert.match(emscadStylesText, /\.mdt-status time\{order:3/);
-      assert.match(emscadStylesText, /\.mdt-status \.mdt-xmit-form\{order:1\}/);
+      assert.match(emscadStylesText, /\.mdt-status\{display:grid;grid-template-columns:minmax\(0,1fr\) 76px 205px/);
+      assert.match(emscadStylesText, /\.status-xmit\{grid-column:2;grid-row:1/);
+      assert.match(emscadStylesText, /\.mdt-status time\{grid-column:3;grid-row:1/);
+      assert.match(emscadStylesText, /\.mdt-xmit-editor\{[^}]*font:inherit/);
       assert.match(emscadStylesText, /\.community-note-role\.buff/);
       const alertAudio = await fetch(`${origin}/fdny_mdt_run.mp3`);
       assert.equal(alertAudio.status, 200);
@@ -325,6 +325,21 @@ describe('DashboardServer account routes', () => {
       ]) {
         const response = await fetch(`${origin}${path}`, { headers: { Cookie: cookie } });
         assert.equal(response.status, 403, `${path} should be admin-only`);
+      }
+
+      for (const accountType of ['buff', 'news'] as const) {
+        const registered = await accounts.register({
+          username: `audience_${accountType}`, firstName: 'Audience', lastName: 'Member',
+          email: `audience-${accountType}-admin-denied@example.test`, phone: '2125550100',
+          usageCase: 'Testing audience access restrictions.', accountType, password: 'Strong-audience-password-123'
+        });
+        const verified = await accounts.verifyEmail(registered.verificationToken);
+        await accounts.updateAccount(verified.id, { status: 'approved' });
+        const audienceSession = await accounts.login(verified.email, 'Strong-audience-password-123');
+        for (const path of ['/api/admin/webhooks', '/api/admin/analytics', '/api/admin/administrators']) {
+          const response = await fetch(`${origin}${path}`, { headers: { Cookie: `nycalert_session=${audienceSession.token}` } });
+          assert.equal(response.status, 401, `${accountType} accounts must not access ${path}`);
+        }
       }
     } finally { await server.stop(); }
   });
