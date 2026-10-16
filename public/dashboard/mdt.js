@@ -11,9 +11,9 @@ const state = {
   selectedAgencies: null,
   authSession: null,
   authRevision: 0,
-  soundEnabled: false,
   queuedAlertSequences: 0,
   audioPlaying: false,
+  awaitingAudioGesture: false,
   currentIncidentId: null,
   dispatchIncident: null,
   dispatchIncidentId: null,
@@ -154,22 +154,18 @@ function matchesDispatchFilters(incident) {
 }
 
 function handleNewIncidents(count) {
-  if (!state.soundEnabled) {
-    showMdtFeedback(`${count} NEW INCIDENT${count === 1 ? '' : 'S'} · ARM SOUND TO HEAR ALERT`, true);
-    return;
-  }
   state.queuedAlertSequences = Math.min(20, state.queuedAlertSequences + count);
   void playQueuedIncidentAlerts();
 }
 
 async function playQueuedIncidentAlerts() {
-  if (state.audioPlaying || !state.soundEnabled) return;
+  if (state.audioPlaying) return;
   state.audioPlaying = true;
   const audio = $('#mdt-incident-alert');
   try {
-    while (state.soundEnabled && state.queuedAlertSequences > 0) {
+    while (state.queuedAlertSequences > 0) {
       state.queuedAlertSequences -= 1;
-      for (let play = 0; play < 4 && state.soundEnabled; play += 1) {
+      for (let play = 0; play < 4; play += 1) {
         audio.currentTime = 0;
         await new Promise((resolve, reject) => {
           const ended = () => { cleanup(); resolve(); };
@@ -188,49 +184,24 @@ async function playQueuedIncidentAlerts() {
       }
     }
   } catch {
-    state.soundEnabled = false;
-    state.queuedAlertSequences = 0;
-    updateSoundControl();
-    showMdtFeedback('INCIDENT ALERT AUDIO UNAVAILABLE · CHECK SOUND SETTINGS', true);
+    if (audio.error || !audio.currentSrc) {
+      state.queuedAlertSequences = 0;
+      state.awaitingAudioGesture = false;
+      showMdtFeedback('INCIDENT ALERT AUDIO UNAVAILABLE · CHECK MDT AUDIO ASSET', true);
+    } else {
+      state.queuedAlertSequences = Math.min(20, state.queuedAlertSequences + 1);
+      state.awaitingAudioGesture = true;
+      showMdtFeedback('BROWSER BLOCKED ALERT AUDIO · INTERACT WITH THE MDT TO RETRY', true);
+    }
   } finally {
     state.audioPlaying = false;
-    if (state.soundEnabled && state.queuedAlertSequences) void playQueuedIncidentAlerts();
   }
 }
 
-function updateSoundControl() {
-  const button = $('#mdt-sound-toggle');
-  button.textContent = 'IR';
-  button.classList.toggle('sound-enabled', state.soundEnabled);
-  button.setAttribute('aria-pressed', String(state.soundEnabled));
-  button.title = state.soundEnabled ? 'IR alert sound enabled · click to disable' : 'IR alert sound disabled · click to enable';
-}
-
-async function toggleIncidentSound() {
-  if (state.soundEnabled) {
-    state.soundEnabled = false;
-    state.queuedAlertSequences = 0;
-    $('#mdt-incident-alert').pause();
-    updateSoundControl();
-    showMdtFeedback('INCIDENT ALERT SOUND OFF');
-    return;
-  }
-  const audio = $('#mdt-incident-alert');
-  const originalVolume = audio.volume;
-  try {
-    // A user gesture primes playback without an audible test tone.
-    audio.volume = 0;
-    await audio.play();
-    audio.pause();
-    audio.currentTime = 0;
-    audio.volume = originalVolume;
-    state.soundEnabled = true;
-    updateSoundControl();
-    showMdtFeedback('INCIDENT ALERT SOUND ARMED · FOUR PLAYS PER NEW INCIDENT');
-  } catch {
-    audio.volume = originalVolume;
-    showMdtFeedback('ALERT SOUND COULD NOT BE ENABLED · CHECK AUDIO SETTINGS', true);
-  }
+function retryQueuedAudioAfterGesture() {
+  if (!state.awaitingAudioGesture || state.audioPlaying || !state.queuedAlertSequences) return;
+  state.awaitingAudioGesture = false;
+  void playQueuedIncidentAlerts();
 }
 
 function buildEntries() {
@@ -471,7 +442,7 @@ function wireControls() {
     render();
     if (!state.hold) void loadIncidents({ announce: true });
   });
-  $('#mdt-sound-toggle').addEventListener('click', () => { void toggleIncidentSound(); });
+  // IR is a decorative console key; it intentionally has no action.
   $('#mdt-logon').addEventListener('click', openLogonModal);
   $('#mdt-logon-close').addEventListener('click', closeLogonModal);
   $('#mdt-logon-modal').addEventListener('click', (event) => {
@@ -711,6 +682,8 @@ try {
 } catch { /* Use all boroughs and agencies when saved settings cannot be read. */ }
 
 wireControls();
+document.addEventListener('pointerdown', retryQueuedAudioAfterGesture, true);
+document.addEventListener('keydown', retryQueuedAudioAfterGesture, true);
 void loadMdtSession();
 updateClock();
 setInterval(updateClock, 1000);

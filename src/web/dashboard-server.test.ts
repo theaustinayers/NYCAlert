@@ -149,8 +149,12 @@ describe('DashboardServer account routes', () => {
       const emscadStylesText = await emscadStyles.text();
       assert.match(emscadStylesText, /grid-template-columns:1\.3fr/);
       assert.match(emscadStylesText, /\.status-xmit/);
+      assert.match(emscadStylesText, /\.mdt-status\{grid-column:1\/-1;grid-row:2;display:flex/);
+      assert.match(emscadStylesText, /\.status-xmit\{order:2/);
+      assert.match(emscadStylesText, /\.mdt-status time\{order:3/);
+      assert.match(emscadStylesText, /\.mdt-status \.mdt-xmit-form\{order:1\}/);
       assert.match(emscadStylesText, /\.community-note-role\.buff/);
-      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-7`);
+      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-9`);
       assert.equal(script.status, 200);
       const source = await script.text();
       assert.match(source, /incidents-updated/);
@@ -177,6 +181,9 @@ describe('DashboardServer account routes', () => {
       assert.match(source, /\/api\/account\/incidents\//);
       assert.match(source, /box\.replace\(\/\^BOX/);
       assert.match(source, /play < 4/);
+      assert.match(source, /function handleNewIncidents\(count\)/);
+      assert.match(source, /function retryQueuedAudioAfterGesture\(\)/);
+      assert.doesNotMatch(source, /toggleIncidentSound|ARM SOUND/);
       assert.match(source, /state\.hasLoadedSnapshot/);
       assert.match(source, /loadOlderIncidents/);
       assert.doesNotMatch(source, /\/api\/live-calls/);
