@@ -598,6 +598,20 @@ export class DashboardStore {
     }).filter((incident) => isValidCoordinates(incident.latitude, incident.longitude) && canShowMapMarker(incident.locationPrecision));
   }
 
+  listRecentIncidents(now = Date.now(), windowMs = 30 * 60 * 1000, limit = 500): DashboardIncident[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
+    if (this.incidentDatabase) return this.incidentDatabase.listRecent(now, windowMs, safeLimit).map((incident) => this.withAudioAvailability(incident));
+    const start = now - windowMs;
+    return this.incidents
+      .filter((incident) => {
+        const updatedAt = Date.parse(incident.updatedAt || incident.occurredAt);
+        return Number.isFinite(updatedAt) && updatedAt >= start && updatedAt <= now;
+      })
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+      .slice(0, safeLimit)
+      .map((incident) => this.withAudioAvailability(incident));
+  }
+
   getAudio(incidentId: string): { path: string; contentType: string } | undefined {
     return this.audioFiles.get(incidentId);
   }

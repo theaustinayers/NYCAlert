@@ -64,6 +64,7 @@ describe('DashboardStore', () => {
     assert.deepEqual(restored.communityNotes, [communityNote]);
     assert.match(restored.updates[0]?.summary ?? '', /Police unit assisting/);
     assert.deepEqual(restored.updates[0]?.unitIds, ['NYPD CAR 1234']);
+    assert.equal(reopened.listRecentIncidents(Date.now() + 30_000, 30 * 60_000).length, 1);
     assert.equal(reopened.search('assisting', ['Queens']).length, 1);
     assert.equal(reopened.listIncidentPage('', ['Queens'], 'fire', 10, 0).total, 1);
     assert.equal(reopened.listIncidentPage('', ['Brooklyn'], 'fire', 10, 0).total, 0);

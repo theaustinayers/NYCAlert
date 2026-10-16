@@ -277,6 +277,15 @@ export class IncidentDatabase {
     return this.hydrate(rows);
   }
 
+  listRecent(now: number, windowMs: number, limit = 500): DashboardIncident[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
+    const rows = this.getDatabase().prepare(`SELECT * FROM incidents
+      WHERE updated_at >= ? AND updated_at <= ?
+      ORDER BY updated_at DESC, occurred_at DESC, id DESC LIMIT ?`)
+      .all(new Date(now - windowMs).toISOString(), new Date(now).toISOString(), safeLimit) as IncidentRow[];
+    return this.hydrate(rows);
+  }
+
   findCommunityPromotion(sourceCallId: string): DashboardIncident | undefined {
     const row = this.getDatabase().prepare('SELECT * FROM incidents WHERE community_source_call_id = ? LIMIT 1').get(sourceCallId) as IncidentRow | undefined;
     return row ? this.hydrate([row])[0] : undefined;

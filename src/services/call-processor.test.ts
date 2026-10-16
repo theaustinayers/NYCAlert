@@ -6,6 +6,7 @@ import type { Client } from 'discord.js';
 import { after, describe, it } from 'node:test';
 import type { CallAnalysisProvider } from '../providers/ai.js';
 import type { SubscriptionStore } from '../storage/subscription-store.js';
+import { IncidentDatabase } from '../storage/incident-database.js';
 import { DashboardStore } from './dashboard-store.js';
 import { CallProcessor, roleMentionOptions } from './call-processor.js';
 import { SourceCallLedger } from './source-call-ledger.js';
@@ -18,6 +19,48 @@ const testDirectory = await mkdtemp(join(tmpdir(), 'nyc-call-processor-'));
 after(async () => rm(testDirectory, { recursive: true, force: true }));
 
 describe('CallProcessor', () => {
+  it('matches a recent published incident after the processor is recreated, including routine follow-up', async () => {
+    const databaseDirectory = join(testDirectory, 'processor-restart-correlation');
+    const dashboard = new DashboardStore(false, 300, false, 100, new IncidentDatabase(databaseDirectory));
+    await dashboard.init();
+    const firstProcessor = new CallProcessor(
+      {} as Client,
+      { listForCall: () => [] } as unknown as SubscriptionStore,
+      {
+        async transcribe() { throw new Error('Transcript supplied'); },
+        async triage() {
+          return { shouldAlert: true, category: 'newsworthy', headline: 'Reported Structure Fire', summary: 'Fire reported at 100 Example Street.', location: '100 Example Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 4 };
+        }
+      },
+      dashboard
+    );
+    const occurredAt = new Date(Date.now() - 2 * 60_000);
+    await firstProcessor.process({ id: 'restart-correlation-new', agency: 'FDNY', borough: 'Manhattan', occurredAt, transcript: 'Fire reported at 100 Example Street.' });
+    dashboard.close();
+
+    const reopenedDashboard = new DashboardStore(false, 300, false, 100, new IncidentDatabase(databaseDirectory));
+    await reopenedDashboard.init();
+
+    const restartedProcessor = new CallProcessor(
+      {} as Client,
+      { listForCall: () => [] } as unknown as SubscriptionStore,
+      {
+        async transcribe() { throw new Error('Transcript supplied'); },
+        async triage() {
+          return { shouldAlert: false, category: 'routine', headline: 'Fire Progress Update', summary: 'One line operating at 100 Example Street.', location: '100 Example Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 1 };
+        }
+      },
+      reopenedDashboard
+    );
+    await restartedProcessor.process({ id: 'restart-correlation-follow-up', agency: 'FDNY', borough: 'Manhattan', occurredAt: new Date(occurredAt.getTime() + 60_000), transcript: 'One line operating at 100 Example Street.' });
+
+    const incidents = reopenedDashboard.search();
+    assert.equal(incidents.length, 1);
+    assert.equal(incidents[0]?.updateCount, 1);
+    assert.match(incidents[0]?.updates[0]?.summary ?? '', /One line operating/);
+    reopenedDashboard.close();
+  });
+
   it('schedules only qualified Buff and News Media webhooks for published incidents and updates', async () => {
     const calls: WebhookDeliveryRequest[] = [];
     let index = 0;

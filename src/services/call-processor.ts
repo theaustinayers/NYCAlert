@@ -395,7 +395,14 @@ export class CallProcessor {
     };
     this.pruneTrackedIncidents(Date.now());
     this.prunePendingIncidents(Date.now());
-    const candidates = this.trackedIncidents.filter((tracked) => isSameIncident(tracked.identity, identity));
+    const trackedById = new Map(this.trackedIncidents.map((tracked) => [tracked.id, tracked]));
+    for (const incident of this.dashboard.listRecentIncidents(Date.now(), 30 * 60 * 1000)) {
+      const recentIdentity = identityFromDashboardIncident(incident);
+      const tracked = trackedById.get(incident.id);
+      if (tracked) tracked.identity = recentIdentity;
+      else trackedById.set(incident.id, { id: incident.id, identity: recentIdentity, messages: [] });
+    }
+    const candidates = [...trackedById.values()].filter((tracked) => isSameIncident(tracked.identity, identity));
     const matchingIncident = candidates.length === 1 ? candidates[0] : undefined;
     this.recordLearning(call, trace, 'correlation', {
       correlation: { candidateCount: candidates.length, ...(matchingIncident ? { incidentId: matchingIncident.id } : {}) },
@@ -444,7 +451,8 @@ export class CallProcessor {
           latitude: updated.latitude,
           longitude: updated.longitude,
           unitIds: updated.unitIds,
-          boxNumbers: updated.boxNumbers
+          boxNumbers: updated.boxNumbers,
+          occurredAt: Math.max(matchingIncident.identity.occurredAt, identity.occurredAt)
         };
         await this.editTrackedMessages(matchingIncident, buildIncidentEmbed(updated));
         logger.info({ incidentId: matchingIncident.id, callId: call.id, unitIds }, 'Updated existing incident with radio follow-up');
@@ -833,6 +841,28 @@ export class CallProcessor {
 
 function qualifiedWebhookAudiences(buffQualified: boolean, newsDeskQualified: boolean): WebhookAudience[] {
   return [...(buffQualified ? ['buff' as const] : []), ...(newsDeskQualified ? ['news' as const] : [])];
+}
+
+function identityFromDashboardIncident(incident: DashboardIncident): IncidentIdentity {
+  const updateTimes = incident.updates.map((update) => Date.parse(update.occurredAt)).filter(Number.isFinite);
+  const occurredAt = Math.max(Date.parse(incident.occurredAt), ...updateTimes);
+  const recentUpdates = incident.updates.slice(-5);
+  return {
+    agency: incident.agency,
+    borough: incident.borough,
+    incidentType: incident.incidentType,
+    eventDescription: [
+      incident.title.split(' | ')[0],
+      incident.summary,
+      ...recentUpdates.map((update) => [update.headline, update.summary].filter(Boolean).join(' '))
+    ].filter(Boolean).join(' ').slice(0, 3_000),
+    location: incident.location,
+    ...(incident.latitude !== undefined ? { latitude: incident.latitude } : {}),
+    ...(incident.longitude !== undefined ? { longitude: incident.longitude } : {}),
+    unitIds: [...new Set([...incident.unitIds, ...recentUpdates.flatMap((update) => update.unitIds)])].slice(0, 12),
+    boxNumbers: [...new Set([...incident.boxNumbers, ...recentUpdates.flatMap((update) => update.boxNumbers)])].slice(0, 8),
+    occurredAt: Number.isFinite(occurredAt) ? occurredAt : Date.parse(incident.updatedAt)
+  };
 }
 
 function boroughExplicitlyStated(location?: string): IncidentIdentity['borough'] | undefined {
