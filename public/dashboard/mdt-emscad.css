@@ -76,9 +76,9 @@ button.rail-control{width:100%;font-family:Arial,Helvetica,sans-serif;cursor:poi
 .mdt-status.composer-visible .mdt-xmit-form{display:block}
 .mdt-status.composer-visible>span:first-child{display:none}
 .mdt-status.composer-visible .mdt-xmit-form{flex:1 1 0}
-.mdt-xmit-form input{width:100%;min-width:0;height:100%;padding:4px 8px;border:0;border-left:2px solid var(--console-edge);border-right:2px solid var(--console-edge);border-radius:0;outline:none;background:#061014;color:#fff;font:700 13px/1.2 'Courier New',Courier,monospace}
-.mdt-xmit-form input:focus{box-shadow:inset 0 0 0 2px var(--console-yellow)}
-.mdt-xmit-form input:disabled{color:#889398;opacity:1}
+.mdt-xmit-form input{width:100%;min-width:0;height:100%;padding:2px 5px;border:0;border-radius:0;outline:none;background:transparent;color:#fff;font:700 13px/1 'Courier New',Courier,monospace;caret-color:#fff}
+.mdt-xmit-form input:focus{box-shadow:none}
+.mdt-xmit-form input:disabled{color:#fff;opacity:1}
 .status-xmit{order:2;flex:0 0 76px;min-width:0;padding:2px 5px;border:0;border-left:2px solid var(--console-edge);border-right:2px solid var(--console-edge);border-radius:0;background:var(--console-red);color:#111;font:700 13px 'Courier New',Courier,monospace;cursor:pointer}
 .mdt-status time{order:3}
 .mdt-status>span:first-child{order:0}
@@ -122,14 +122,3 @@ button.rail-control{width:100%;font-family:Arial,Helvetica,sans-serif;cursor:poi
 @media(max-width:760px){.mdt-workspace{grid-template-rows:minmax(0,1fr) 40px 50px}.mdt-status{font-size:10px}.mdt-status time{flex-basis:156px;padding-inline:4px}.status-xmit{flex-basis:58px;font-size:11px}.mdt-xmit-form{flex-basis:80px}.mdt-xmit-form input{padding:3px 5px;font-size:10px}.mdt-xmit-feedback{bottom:60px;left:8px;right:8px;max-width:none;font-size:11px}}
 @media(max-width:390px){.mdt-workspace{grid-template-rows:minmax(0,1fr) 36px 44px}.mdt-status{font-size:9px}.mdt-status time{flex-basis:140px;padding-inline:3px}.status-xmit{flex-basis:44px;padding:2px;font-size:10px}.mdt-xmit-form{flex-basis:50px}.mdt-xmit-form input{padding:2px 4px;font-size:9px}}
 
-/* Keep the status row fixed; show the note composer over its original black text area. */
-.mdt-status{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 76px 205px;grid-template-rows:minmax(0,1fr)}
-.mdt-status>span:first-child{grid-column:1;grid-row:1;display:flex!important;min-width:0}
-.mdt-xmit-form,.mdt-status.composer-visible .mdt-xmit-form{grid-column:1;grid-row:1;z-index:1;display:none;min-width:0;margin:0}
-.mdt-status.composer-visible .mdt-xmit-form{display:block}
-.status-xmit{grid-column:2;grid-row:1;min-width:0;flex:auto}
-.mdt-status time{grid-column:3;grid-row:1;min-width:0;flex:auto}
-.mdt-xmit-form input,.mdt-xmit-form input:disabled{background:#000;color:#fff;font:700 13px/1.2 'Courier New',Courier,monospace}
-.mdt-xmit-form input::placeholder{color:#fff;opacity:1}
-@media(max-width:760px){.mdt-status{grid-template-columns:minmax(0,1fr) 58px 156px}.mdt-status time{min-width:0}.status-xmit{min-width:0}}
-@media(max-width:390px){.mdt-status{grid-template-columns:minmax(0,1fr) 44px 140px}.mdt-status time{min-width:0}}

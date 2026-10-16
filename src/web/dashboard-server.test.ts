@@ -118,11 +118,12 @@ describe('DashboardServer account routes', () => {
       assert.equal(alertAudio.status, 200);
       assert.match(alertAudio.headers.get('content-type') ?? '', /audio\/mpeg/);
       assert.ok((await alertAudio.arrayBuffer()).byteLength > 0);
-      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-14`);
+      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-15`);
       assert.equal(script.status, 200);
       const source = await script.text();
       const topLevelPrelude = source.split('function updateClock()')[0] ?? '';
       assert.doesNotMatch(topLevelPrelude, /\bvisible\s*=\s*entries\./);
+      assert.doesNotMatch(source, /messageInput\.placeholder/);
       assert.match(source, /incidents-updated/);
       assert.match(source, /\/api\/v1\/incidents/);
       assert.match(source, /updateLastIncidentAge/);

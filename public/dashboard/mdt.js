@@ -588,7 +588,6 @@ function updateXmitControls() {
   messageInput.hidden = !showComposer;
   messageInput.disabled = !enabled;
   $('.mdt-status').classList.toggle('composer-visible', showComposer);
-  messageInput.placeholder = canSubmit ? 'TYPE COMMUNITY NOTE…' : 'LOGON TO XMIT A COMMUNITY NOTE';
   $('#mdt-xmit').disabled = state.xmitBusy;
   $('#mdt-logon').textContent = 'LOGON';
   $('#mdt-logon').title = state.authSession?.account?.username ? `Signed in as @${state.authSession.account.username}` : 'Log in';
