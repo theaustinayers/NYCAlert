@@ -175,3 +175,46 @@
 
 /* Style the generated Live Radio call title as the card’s clear title treatment, replacing the address line without adding visual clutter. */
 .live-call-generated-title{display:grid;gap:4px;margin:8px 0 10px;padding-left:9px;border-left:2px solid var(--cyan)}.live-call-generated-title>span{color:#72859a;font:8px var(--mono);letter-spacing:.09em}.live-call-generated-title>strong{color:#edf4fa;font:700 15px/1.4 var(--display);overflow-wrap:anywhere}
+
+/* Give tablet-width headers two rows before the full mobile layout kicks in. */
+@media (min-width: 561px) and (max-width: 900px) {
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand account"
+      "ticker status";
+    align-items: center;
+    gap: 8px 12px;
+    height: auto;
+    min-height: 0;
+    padding: 8px 16px;
+  }
+  .topbar > .brand { grid-area: brand; min-width: 0; }
+  .topbar > .brand .brand-logo { width: 48px; height: 48px; flex-basis: 48px; }
+  .topbar > .brand .brand-caption,
+  .topbar > .brand .brand-divider { display: none; }
+  .topbar > .account-actions { grid-area: account; min-width: 0; }
+  .topbar > .donate-button,
+  .topbar > .invite-button { display: none; }
+  .topbar > .incident-ticker:not([hidden]) {
+    position: static;
+    inset: auto;
+    grid-area: ticker;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    margin: 0;
+  }
+  .topbar > .topbar-right {
+    grid-area: status;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    font-size: 9px;
+  }
+  .topbar > .topbar-right .top-date,
+  .topbar > .topbar-right .top-divider { display: none; }
+  .incident-ticker > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
