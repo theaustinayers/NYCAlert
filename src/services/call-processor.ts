@@ -5,7 +5,7 @@ import { subscriptionAudience, type AlertSubscription } from '../domain/subscrip
 import { analyzeFdnyTransmission } from '../domain/fdny-radio.js';
 import { canShowMapMarker, type LocationPrecision } from '../domain/location.js';
 import { deriveCallType } from '../domain/call-type.js';
-import { curateIncidentHeadline, shouldNotify, type CallTriage, type RadioCall } from '../domain/triage.js';
+import { applyFdnyTenSeventyFiveOverride, curateIncidentHeadline, explicitFdnyTenSeventyFive, shouldNotify, type CallTriage, type RadioCall } from '../domain/triage.js';
 import type { IncidentPostPublisher } from '../providers/x-post.js';
 import type { CallAnalysisProvider } from '../providers/ai.js';
 import type { MapCoordinates } from '../providers/map-geocoder.js';
@@ -271,9 +271,10 @@ export class CallProcessor {
       });
       throw error;
     }
+    const deterministicTriage = applyFdnyTenSeventyFiveOverride(analyzedTriage, transcript, call.agency);
     const triage: CallTriage = {
-      ...analyzedTriage,
-      headline: curateIncidentHeadline(analyzedTriage.headline, transcript, call.agency)
+      ...deterministicTriage,
+      headline: curateIncidentHeadline(deterministicTriage.headline, transcript, call.agency)
     };
     this.dashboard.recordFeedCallActivity(call.agency, call.borough);
     trace.headline = triage.headline;
@@ -455,6 +456,9 @@ export class CallProcessor {
           occurredAt: Math.max(matchingIncident.identity.occurredAt, identity.occurredAt)
         };
         await this.editTrackedMessages(matchingIncident, buildIncidentEmbed(updated));
+        if (explicitFdnyTenSeventyFive(transcript, call.agency) && publicQualified) {
+          await this.notifyNewlyEligibleEscalationChannels(updated, matchingIncident, eligibleSubscriptions, call, trace);
+        }
         logger.info({ incidentId: matchingIncident.id, callId: call.id, unitIds }, 'Updated existing incident with radio follow-up');
         this.recordLearning(call, trace, 'incident-updated', { incidentId: matchingIncident.id, disposition: 'correlated-follow-up', correlation: { candidateCount: candidates.length, incidentId: matchingIncident.id } });
         this.scheduleWebhookDelivery(updated, 'incident.updated', qualifiedWebhookAudiences(buffQualified, newsDeskQualified), call.id);
@@ -487,6 +491,18 @@ export class CallProcessor {
       this.recordLearning(call, trace, 'incident-withheld', {
         disposition: 'explicit-borough-conflict-unverified',
         location: triage.location
+      });
+      return 'processed';
+    }
+
+    const pendingCandidates = this.pendingIncidents.filter((pending) => isSameIncident(pending.identity, identity));
+    if ((!qualifiesAsIncident || triage.category === 'routine') && pendingCandidates.length === 1) {
+      const pending = pendingCandidates[0]!;
+      this.updatePendingFromFollowup(pending, identity, triage, unitAssignments, call);
+      await recordLiveCall();
+      this.recordLearning(call, trace, 'pending-updated', {
+        disposition: 'matched-private-provisional-report',
+        correlation: { candidateCount: candidates.length, pendingMatchCount: 1 }
       });
       return 'processed';
     }
@@ -826,6 +842,36 @@ export class CallProcessor {
     this.pendingIncidents.length = Math.min(this.pendingIncidents.length, 300);
   }
 
+  private updatePendingFromFollowup(
+    pending: PendingIncident,
+    identity: IncidentIdentity,
+    triage: CallTriage,
+    unitAssignments: ReturnType<typeof extractActingAsAssignments>,
+    call: RadioCall
+  ): void {
+    pending.identity = {
+      ...pending.identity,
+      eventDescription: `${pending.identity.eventDescription ?? ''} ${identity.eventDescription ?? ''}`.trim(),
+      unitIds: [...new Set([...pending.identity.unitIds, ...identity.unitIds])],
+      boxNumbers: [...new Set([...(pending.identity.boxNumbers ?? []), ...(identity.boxNumbers ?? [])])]
+    };
+    pending.summary = `${pending.summary} Follow-up: ${triage.summary}`.slice(0, 1_200);
+    pending.unitAssignments = [...pending.unitAssignments, ...unitAssignments].slice(-24);
+    pending.expiresAt = Math.max(pending.expiresAt, Date.now() + 30 * 60 * 1000);
+    pending.workflowPath.push('pending-updated');
+    this.learningLog.record({
+      eventId: pending.eventId,
+      callId: pending.callId,
+      occurredAt: new Date(pending.identity.occurredAt).toISOString(),
+      loggedAt: new Date().toISOString(),
+      stage: 'pending-updated',
+      workflowPath: [...pending.workflowPath],
+      agency: pending.identity.agency,
+      feedBorough: pending.identity.borough,
+      disposition: 'matched-private-provisional-report'
+    });
+  }
+
   private async editTrackedMessages(incident: TrackedIncident, embed: EmbedBuilder): Promise<void> {
     for (const reference of incident.messages) {
       const channel = await this.client.channels.fetch(reference.channelId).catch(() => null);
@@ -837,7 +883,83 @@ export class CallProcessor {
       });
     }
   }
-}
+
+  private async notifyNewlyEligibleEscalationChannels(
+      incident: DashboardIncident,
+      tracked: TrackedIncident,
+      subscriptions: AlertSubscription[],
+      call: RadioCall,
+      trace: LearningTrace
+    ): Promise<void> {
+      const previouslyNotified = new Set(tracked.messages.map((message) => message.channelId));
+      const destinations = new Map<string, AlertSubscription[]>();
+      for (const subscription of subscriptions) {
+        if (previouslyNotified.has(subscription.channelId)) continue;
+        const group = destinations.get(subscription.channelId) ?? [];
+        group.push(subscription);
+        destinations.set(subscription.channelId, group);
+      }
+
+      const results: NonNullable<LearningEvent['routing']>['destinations'] = [];
+      let sent = 0;
+      let channelFetchFailures = 0;
+      let unsupportedDestinations = 0;
+      let sendFailures = 0;
+      const embed = buildIncidentEmbed(incident);
+      for (const [channelId, channelSubscriptions] of destinations) {
+        let channel;
+        try {
+          channel = await this.client.channels.fetch(channelId);
+        } catch (error) {
+          channelFetchFailures += 1;
+          results.push({ result: 'channel-fetch-failed', errorCategory: discordErrorCategory(error) });
+          continue;
+        }
+        if (!channel?.isTextBased() || !('send' in channel)) {
+          unsupportedDestinations += 1;
+          results.push({ result: 'unsupported-channel' });
+          continue;
+        }
+        const rolePings = roleMentionOptions(channelSubscriptions);
+        try {
+          const message = await channel.send({
+            embeds: [embed],
+            ...(rolePings.content ? { content: rolePings.content } : {}),
+            allowedMentions: rolePings.allowedMentions
+          });
+          tracked.messages.push({ channelId, messageId: message.id });
+          sent += 1;
+          results.push({ result: 'sent' });
+        } catch (error) {
+          sendFailures += 1;
+          results.push({ result: 'send-failed', errorCategory: discordErrorCategory(error) });
+          logger.warn({ incidentId: incident.id, callId: call.id, channelId, error }, 'Could not send newly qualified 10-75 escalation alert');
+        }
+      }
+      if (!destinations.size) return;
+      this.recordLearning(call, trace, 'discord-routing', {
+        incidentId: incident.id,
+        disposition: sent > 0 && results.some((result) => result.result !== 'sent') ? 'partially-sent'
+          : sent > 0 ? 'alerts-sent'
+            : sendFailures > 0 ? 'discord-send-failed'
+              : channelFetchFailures > 0 ? 'discord-channel-fetch-failed'
+                : 'no-sendable-discord-destination',
+        routing: {
+          eligibleSubscriptions: subscriptions.filter((subscription) => !previouslyNotified.has(subscription.channelId)).length,
+          public: subscriptions.filter((subscription) => !previouslyNotified.has(subscription.channelId) && subscriptionAudience(subscription) === 'public').length,
+          buff: subscriptions.filter((subscription) => !previouslyNotified.has(subscription.channelId) && subscriptionAudience(subscription) === 'buff').length,
+          newsMedia: subscriptions.filter((subscription) => !previouslyNotified.has(subscription.channelId) && subscriptionAudience(subscription) === 'news').length,
+          destinationCount: destinations.size,
+          successfulDestinations: sent,
+          channelFetchFailures,
+          unsupportedDestinations,
+          sendFailures,
+          discordMessagesSent: sent,
+          destinations: results
+        }
+      });
+    }
+  }
 
 function qualifiedWebhookAudiences(buffQualified: boolean, newsDeskQualified: boolean): WebhookAudience[] {
   return [...(buffQualified ? ['buff' as const] : []), ...(newsDeskQualified ? ['news' as const] : [])];

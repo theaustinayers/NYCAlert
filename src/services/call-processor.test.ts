@@ -19,6 +19,77 @@ const testDirectory = await mkdtemp(join(tmpdir(), 'nyc-call-processor-'));
 after(async () => rm(testDirectory, { recursive: true, force: true }));
 
 describe('CallProcessor', () => {
+  it('attaches a below-threshold routine follow-up to a unique pending Box report without publishing it', async () => {
+    const triages: CallTriage[] = [
+      { shouldAlert: true, category: 'newsworthy', headline: 'Reported Fire', summary: 'Fire reported at the Box location.', location: '125-15 Lucas Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 3, buffInterestScore: 4 },
+      { shouldAlert: false, category: 'routine', headline: 'Fire Under Control', summary: 'Fire under control; secondary searches negative.', location: '125-15 Luther Street', incidentType: 'other', confidence: 0.8, newsworthinessScore: 1 }
+    ];
+    let index = 0;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript supplied'); },
+      async triage() { return triages[index++]!; }
+    };
+    const dashboard = new DashboardStore(false);
+    const processor = new CallProcessor(
+      {} as Client,
+      { listForCall: () => [] } as unknown as SubscriptionStore,
+      analysis,
+      dashboard,
+      false,
+      0.78,
+      4,
+      { async geocode() { return undefined; } }
+    );
+    const occurredAt = new Date(Date.now() - 60_000);
+
+    await processor.process({ id: 'box-5758-initial', agency: 'FDNY', borough: 'Queens', occurredAt, transcript: 'Box 5758, smoke reported at 125-15 Lucas Street.' });
+    assert.equal(processor.listPendingIncidents().length, 1);
+    await processor.process({ id: 'box-5758-under-control', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(occurredAt.getTime() + 6 * 60_000), transcript: 'Box 5758, fire under control; secondary searches negative at 125-15 Luther Street.' });
+
+    const pending = processor.listPendingIncidents();
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]?.location, '125-15 Lucas Street', 'the heard street conflict remains a candidate, not an automatic correction');
+    assert.match(pending[0]?.summary ?? '', /Fire under control/);
+    assert.match(pending[0]?.summary ?? '', /secondary searches negative/);
+    assert.equal(dashboard.search().length, 0, 'a low-score follow-up must not publish the provisional report');
+  });
+
+  it('attaches an operational Box follow-up despite a street-name conflict without changing the canonical address', async () => {
+    const triages: CallTriage[] = [
+      { shouldAlert: true, category: 'newsworthy', headline: 'Smoke Investigation', summary: 'Smoke reported on the fifth floor.', location: '125-15 Lucas Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 3, buffInterestScore: 4 },
+      { shouldAlert: false, category: 'routine', headline: 'Fire Under Control', summary: 'Fire under control; secondary searches negative.', location: '125-15 Luther Street', incidentType: 'other', confidence: 0.8, newsworthinessScore: 1 }
+    ];
+    let index = 0;
+    const analysis: CallAnalysisProvider = {
+      async transcribe() { throw new Error('Transcript supplied'); },
+      async triage() { return triages[index++]!; }
+    };
+    const dashboard = new DashboardStore(false);
+    const processor = new CallProcessor(
+      {} as Client,
+      { listForCall: () => [] } as unknown as SubscriptionStore,
+      analysis,
+      dashboard,
+      false,
+      0.78,
+      4,
+      { async geocode(location) {
+        return location === '125-15 Lucas Street' ? { latitude: 40.72, longitude: -73.81, precision: 'street_address' as const } : undefined;
+      } }
+    );
+    const occurredAt = new Date(Date.now() - 60_000);
+
+    await processor.process({ id: 'box-5758-published', agency: 'FDNY', borough: 'Queens', occurredAt, transcript: 'Box 5758, smoke reported at 125-15 Lucas Street.' });
+    await processor.process({ id: 'box-5758-control', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(occurredAt.getTime() + 6 * 60_000), transcript: 'Box 5758, fire under control; secondary searches negative at 125-15 Luther Street.' });
+
+    const incidents = dashboard.search();
+    assert.equal(incidents.length, 1);
+    assert.equal(incidents[0]?.location, '125-15 Lucas Street', 'the conflicting follow-up must not silently correct the published address');
+    assert.equal(incidents[0]?.updateCount, 1);
+    assert.match(incidents[0]?.updates[0]?.summary ?? '', /secondary searches negative/);
+    assert.equal(incidents[0]?.updates[0]?.location, '125-15 Luther Street', 'preserve the source wording in the timeline');
+  });
+
   it('matches a recent published incident after the processor is recreated, including routine follow-up', async () => {
     const databaseDirectory = join(testDirectory, 'processor-restart-correlation');
     const dashboard = new DashboardStore(false, 300, false, 100, new IncidentDatabase(databaseDirectory));
@@ -327,6 +398,63 @@ describe('CallProcessor', () => {
     assert.ok(events.filter((event) => event.category).every((event) => event.trafficType === 'routine'));
     assert.equal(events.find((event) => event.stage === 'received')?.trafficType, 'unclassified');
     assert.ok(events.some((event) => event.disposition === 'below-audience-threshold-or-routine'));
+  });
+
+  it('promotes a matched incident to Breaking 5/5 on an explicit FDNY 10-75 follow-up', async () => {
+    const deliveryEvents: WebhookDeliveryRequest[] = [];
+    let triageIndex = 0;
+    const triages: CallTriage[] = [
+      { shouldAlert: true, category: 'newsworthy', headline: 'Smoke Investigation', summary: 'Smoke reported at 342 East 55th Street.', location: '342 East 55th Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 3, buffInterestScore: 4, assignmentDeskScore: 3 },
+      { shouldAlert: false, category: 'routine', headline: 'Fire Assignment', summary: 'Fire assignment reported at apartment 7 Adam.', location: '342 East 55th Street', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 1, buffInterestScore: 1, assignmentDeskScore: 1 }
+    ];
+    const subscriptions = [
+      { guildId: 'g', channelId: 'public-channel', borough: 'Queens' as const, agency: 'FDNY' as const, audience: 'public' as const, notifyRoleId: 'public-role' },
+      { guildId: 'g', channelId: 'buff-channel', borough: 'Queens' as const, agency: 'FDNY' as const, audience: 'buff' as const, notifyRoleId: 'buff-role' }
+    ];
+    const sentByChannel = new Map<string, number>();
+    let messageSequence = 0;
+    let edits = 0;
+    const makeChannel = (channelId: string) => ({
+      isTextBased: () => true,
+      messages: { async fetch() { return { async edit() { edits += 1; } }; } },
+      async send() {
+        messageSequence += 1;
+        sentByChannel.set(channelId, (sentByChannel.get(channelId) ?? 0) + 1);
+        return { id: `message-${messageSequence}` };
+      }
+    });
+    const client = { channels: { async fetch(channelId: string) {
+      return makeChannel(channelId);
+    } } } as unknown as Client;
+    const dashboard = new DashboardStore(false);
+    dashboard.setFeedStatusProvider(() => [{ id: 'queens', name: 'Queens', agency: 'FDNY', borough: 'Queens', state: 'online', callsSeen: 2 }]);
+    const processor = new CallProcessor(
+      client,
+      { listForCall: () => subscriptions } as unknown as SubscriptionStore,
+      { async transcribe() { throw new Error('Transcript supplied'); }, async triage() { return triages[triageIndex++]!; } },
+      dashboard,
+      false, 0.78, 4, undefined, 4, 4, undefined, undefined, 'https://nycalert.ai', 0, undefined,
+      { async deliver(request: WebhookDeliveryRequest) { deliveryEvents.push(request); return []; } }
+    );
+    const occurredAt = new Date(Date.now() - 60_000);
+    await processor.process({ id: 'ten75-initial', agency: 'FDNY', borough: 'Queens', occurredAt, transcript: 'Smoke reported at 342 East 55th Street.' });
+    await processor.process({ id: 'ten75-followup', agency: 'FDNY', borough: 'Queens', occurredAt: new Date(occurredAt.getTime() + 60_000), transcript: '10-75 for fire at apartment 7 Adam, 342 East 55th Street.' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const incident = dashboard.search()[0];
+    assert.equal(dashboard.search().length, 1);
+    assert.equal(incident?.category, 'breaking');
+    assert.equal(incident?.newsworthinessScore, 5);
+    assert.equal(incident?.buffInterestScore, 5);
+    assert.equal(incident?.assignmentDeskScore, 5);
+    assert.equal(incident?.updateCount, 1);
+    assert.equal(dashboard.listLiveCalls()[0]?.category, 'breaking');
+    assert.equal(dashboard.getFeedStatuses()[0]?.alertSeverity, 'breaking');
+    assert.equal(deliveryEvents[1]?.event, 'incident.updated');
+    assert.deepEqual(deliveryEvents[1]?.audiences, ['buff', 'news']);
+    assert.equal(sentByChannel.get('buff-channel'), 1, 'already-notified Buff channel gets its original alert edited without a duplicate send');
+    assert.equal(sentByChannel.get('public-channel'), 1, 'newly-qualified Public channel receives the breaking escalation');
+    assert.equal(edits, 1);
   });
 
   it('flashes a source feed only after a confident non-routine call is saved to Live Radio', async () => {

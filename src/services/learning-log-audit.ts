@@ -14,7 +14,7 @@ const boroughOnlyLocations = new Set(['manhattan', 'bronx', 'queens', 'brooklyn'
 
 const knownStages = new Set([
   'received', 'transcription', 'transcription-error', 'transcription-ignored', 'source-duplicate-suppressed', 'incident-feedback', 'repeat-suppressed',
-  'triage', 'triage-error', 'geocoding', 'correlation', 'pending-queue', 'incident-published',
+  'triage', 'triage-error', 'geocoding', 'correlation', 'pending-queue', 'pending-updated', 'incident-published',
   'incident-updated', 'incident-suppressed', 'incident-withheld', 'discord-routing', 'x-publishing', 'pending-expired',
   'pending-attached', 'pending-discarded', 'pending-approved', 'retry', 'error'
 ]);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { curateIncidentHeadline, curateRoutineUpdateHeadline, curateRoutineUpdateSummary, explicitFdnyAirportAlarm, explicitFdnyTenSeventyFive, explicitFdnyThirdAlarmOrHigher, normalizeIncidentHeadline, shouldNotify, type CallTriage } from './triage.js';
+import { applyFdnyTenSeventyFiveOverride, curateIncidentHeadline, curateRoutineUpdateHeadline, curateRoutineUpdateSummary, explicitFdnyAirportAlarm, explicitFdnyTenSeventyFive, explicitFdnyThirdAlarmOrHigher, normalizeIncidentHeadline, shouldNotify, type CallTriage } from './triage.js';
 
 const result: CallTriage = { shouldAlert: true, category: 'breaking', summary: 'Dispatch reports a major incident.', confidence: 0.9, newsworthinessScore: 5 };
 
@@ -45,6 +45,20 @@ describe('explicitFdnyTenSeventyFive', () => {
     assert.equal(explicitFdnyTenSeventyFive('Engine 10 and Ladder 75 responding.', 'FDNY'), false);
     assert.equal(explicitFdnyTenSeventyFive('10-75 reported on the radio.', 'NYPD'), false);
     assert.equal(explicitFdnyTenSeventyFive('Ten seventy, five units responding.', 'FDNY'), false);
+  });
+
+  it('overrides all audience scores and the category for a literal FDNY 10-75 only', () => {
+    const ordinary: CallTriage = {
+      shouldAlert: false, category: 'routine', summary: 'Fire assignment reported.', confidence: 0.9,
+      newsworthinessScore: 1, buffInterestScore: 2, assignmentDeskScore: 1
+    };
+    const promoted = applyFdnyTenSeventyFiveOverride(ordinary, 'Transmitting 10-75 for fire.', 'FDNY');
+    assert.equal(promoted.shouldAlert, true);
+    assert.equal(promoted.category, 'breaking');
+    assert.equal(promoted.newsworthinessScore, 5);
+    assert.equal(promoted.buffInterestScore, 5);
+    assert.equal(promoted.assignmentDeskScore, 5);
+    assert.equal(applyFdnyTenSeventyFiveOverride(ordinary, 'Transmitting 10-75.', 'NYPD'), ordinary);
   });
 });
 

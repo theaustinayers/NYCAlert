@@ -142,7 +142,14 @@ export function applyFdnyTenSeventyFiveOverride(
   agency?: Agency
 ): CallTriage {
   if (!explicitFdnyTenSeventyFive(transcript, agency)) return result;
-  return { ...result, shouldAlert: true, category: 'breaking', newsworthinessScore: 5 };
+  return {
+    ...result,
+    shouldAlert: true,
+    category: 'breaking',
+    newsworthinessScore: 5,
+    buffInterestScore: 5,
+    assignmentDeskScore: 5
+  };
 }
 
 /** Airport context raises an explicit FDNY alarm above generic routine traffic, but does not imply danger. */

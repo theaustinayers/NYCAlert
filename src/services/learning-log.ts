@@ -18,6 +18,7 @@ export type LearningWorkflowStage =
   | 'geocoding'
   | 'correlation'
   | 'pending-queue'
+  | 'pending-updated'
   | 'incident-published'
   | 'incident-updated'
   | 'incident-suppressed'

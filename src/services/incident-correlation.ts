@@ -171,6 +171,12 @@ function explicitAddressesConflict(left?: string, right?: string): boolean {
   return first.houseNumber !== second.houseNumber || first.street !== second.street;
 }
 
+function sameExplicitHouseNumber(left?: string, right?: string): boolean {
+  const first = explicitStreetAddress(left);
+  const second = explicitStreetAddress(right);
+  return Boolean(first && second && first.houseNumber === second.houseNumber);
+}
+
 function statedBorough(location?: string): Borough | undefined {
   if (!location) return undefined;
   const match = /(?:,\s*|\bin\s+|\bnear\s+)(Manhattan|Bronx|Queens|Brooklyn|Staten\s+Island)\s*$/i.exec(location);
@@ -329,8 +335,14 @@ export function isSameIncident(existing: IncidentIdentity, incoming: IncidentIde
   const sharedBox = Boolean(existing.boxNumbers?.some((box) => incoming.boxNumbers?.includes(box)));
   if (explicitBoroughsConflict(existing.location, incoming.location)) return false;
   const coordsConflict = coordinatesConflict(existing, incoming, 500);
-  // Address corrections are a separate narrow route. A Box number alone never overrides
-  // a conflicting address, borough, precise coordinates, or a different concrete event type.
+  const boxContinuation = existing.agency === 'FDNY' && sameBorough && existing.borough !== 'Citywide'
+    && sharedBox && age <= 10 * 60_000 && !coordsConflict && nonConflictingType(existing.incidentType, incoming.incidentType)
+    && (!explicitAddressesConflict(existing.location, incoming.location)
+      || (incoming.isOperationalUpdate === true && sameExplicitHouseNumber(existing.location, incoming.location)));
+  if (boxContinuation) return true;
+  // Address corrections are a separate narrow route. A Box plus an explicit operational
+  // continuation may preserve a candidate despite a heard street-name conflict; callers
+  // must keep the canonical location unchanged unless independently verified.
   const correctionMatch = existing.agency === 'FDNY' && sameBorough && existing.borough !== 'Citywide'
     && sharedBox && incoming.isExplicitLocationCorrection === true && age <= 10 * 60_000
     && Boolean(explicitStreetAddress(incoming.location))
