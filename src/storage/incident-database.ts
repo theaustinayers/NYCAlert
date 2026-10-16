@@ -54,6 +54,7 @@ interface CommunityNoteRow {
   incident_id: string;
   username: string;
   audience: 'buff' | 'news';
+  author_role: 'owner' | 'admin' | 'moderator' | 'reviewer' | null;
   message: string;
   created_at: string;
 }
@@ -120,6 +121,7 @@ const schema = `
     incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
     username TEXT NOT NULL,
     audience TEXT NOT NULL CHECK (audience IN ('buff', 'news')),
+    author_role TEXT CHECK (author_role IS NULL OR author_role IN ('owner', 'admin', 'moderator', 'reviewer')),
     message TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
@@ -145,12 +147,21 @@ export class IncidentDatabase {
     database.pragma('foreign_keys = ON');
     database.pragma('busy_timeout = 5000');
     const version = Number(database.pragma('user_version', { simple: true }));
-    if (version > 2) {
+    if (version > 3) {
       database.close();
       throw new Error(`Incident database schema version ${version} is newer than this application supports.`);
     }
     database.exec(schema);
-    if (version < 2) database.pragma('user_version = 2');
+    if (version === 0) database.pragma('user_version = 3');
+    else if (version < 3) {
+      database.transaction(() => {
+        const columns = database.prepare('PRAGMA table_info(incident_community_notes)').all() as Array<{ name: string }>;
+        if (!columns.some((column) => column.name === 'author_role')) {
+          database.exec("ALTER TABLE incident_community_notes ADD COLUMN author_role TEXT CHECK (author_role IS NULL OR author_role IN ('owner', 'admin', 'moderator', 'reviewer'))");
+        }
+        database.pragma('user_version = 3');
+      })();
+    }
     await chmod(dirname(this.filePath), 0o700);
     await chmod(this.filePath, 0o600);
     this.database = database;
@@ -198,8 +209,8 @@ export class IncidentDatabase {
   }
 
   addCommunityNote(incidentId: string, note: CommunityIncidentNote): void {
-    this.getDatabase().prepare(`INSERT INTO incident_community_notes (id, incident_id, username, audience, message, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)`).run(note.id, incidentId, note.username, note.audience, note.message, note.createdAt);
+    this.getDatabase().prepare(`INSERT INTO incident_community_notes (id, incident_id, username, audience, author_role, message, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(note.id, incidentId, note.username, note.audience ?? 'news', note.role ?? null, note.message, note.createdAt);
   }
 
   list(query = '', boroughs?: readonly Borough[], limit = 100_000, offset = 0, callType?: CallType): DashboardIncident[] {
@@ -310,7 +321,13 @@ export class IncidentDatabase {
       const communityNotes = this.getDatabase().prepare(`SELECT * FROM incident_community_notes WHERE incident_id IN (${placeholders}) ORDER BY incident_id, created_at, id`).all(...batch) as CommunityNoteRow[];
       for (const note of communityNotes) {
         const notes = communityNotesByIncident.get(note.incident_id) ?? [];
-        notes.push({ id: note.id, username: note.username, audience: note.audience, message: note.message, createdAt: note.created_at });
+        notes.push({
+          id: note.id,
+          username: note.username,
+          ...(note.author_role ? { role: note.author_role } : { audience: note.audience }),
+          message: note.message,
+          createdAt: note.created_at
+        });
         communityNotesByIncident.set(note.incident_id, notes);
       }
     }

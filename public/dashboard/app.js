@@ -358,8 +358,8 @@ function renderIncidents() {
       const author = document.createElement('strong');
       author.textContent = `@${note.username}`;
       const role = document.createElement('span');
-      role.className = `community-note-role ${note.audience === 'buff' ? 'buff' : 'news'}`;
-      role.textContent = note.audience === 'buff' ? 'BUFF' : 'NEWS MEDIA';
+      role.className = note.role ? `community-note-role staff-${note.role}` : `community-note-role ${note.audience === 'buff' ? 'buff' : 'news'}`;
+      role.textContent = note.role ? note.role === 'owner' ? 'ADMIN' : note.role.toUpperCase() : note.audience === 'buff' ? 'BUFF' : 'NEWS MEDIA';
       const time = document.createElement('time');
       time.dateTime = note.createdAt;
       time.textContent = formatTime(note.createdAt);

@@ -7,6 +7,7 @@ const state = {
   hold: false,
   hasLoadedSnapshot: false,
   view: 'dispatch',
+  historyClearedAt: null,
   selectedBoroughs: null,
   selectedAgencies: null,
   authSession: null,
@@ -25,6 +26,7 @@ const state = {
   xmitBusy: false,
   feedbackTimer: null,
   lastSignature: '',
+  incidentRevision: 0,
   nextOffset: 0,
   total: 0,
   hasMore: false,
@@ -35,7 +37,7 @@ const state = {
   following: true
 };
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-
+    visible = entries.filter((entry) => entry.incidentId === state.dispatchIncidentId && entry.kind !== 'update');
 function updateClock() {
   $('#mdt-clock').textContent = `${new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())} ET`;
 }
@@ -83,6 +85,7 @@ function incidentSignature(incidents) {
 
 async function loadIncidents({ announce = false, append = false } = {}) {
   if (!state.started || state.hold) return;
+  const requestRevision = ++state.incidentRevision;
   const offset = append ? state.nextOffset : 0;
   const params = new URLSearchParams({ limit: '100', offset: String(offset) });
   if (state.selectedBoroughs !== null) {
@@ -98,18 +101,31 @@ async function loadIncidents({ announce = false, append = false } = {}) {
     const response = await fetch(`/api/v1/incidents?${params}`, { cache: 'no-store', signal: controller.signal });
     if (!response.ok) throw new Error(`Incident API returned ${response.status}`);
     const result = await response.json();
-    if (state.hold) return;
+    if (state.hold || requestRevision !== state.incidentRevision) return;
     const incidents = Array.isArray(result.data) ? result.data : [];
     setConnection(true);
     if (!append) void refreshLatestIncident(state.selectedBoroughs === null ? incidents : undefined);
     const signature = incidentSignature(incidents);
     if (!append && state.hasLoadedSnapshot) {
-      const existingIds = new Set(state.incidents.map((incident) => incident.id));
-      const newlyArrived = incidents.filter((incident) => !existingIds.has(incident.id)
-        && matchesDispatchFilters(incident));
-      if (newlyArrived.length) {
-        if (!state.hold && state.view === 'dispatch') state.dispatchIncidentId = newlyArrived[0].id;
-        handleNewIncidents(newlyArrived.length);
+      const previousById = new Map(state.incidents.map((incident) => [incident.id, incident]));
+      const incomingUpdates = incidents.filter((incident) => {
+        const previous = previousById.get(incident.id);
+        return previous && (previous.updatedAt !== incident.updatedAt || previous.updateCount !== incident.updateCount)
+          && matchesDispatchFilters(incident);
+      });
+      const newlyArrived = incidents.filter((incident) => !previousById.has(incident.id) && matchesDispatchFilters(incident));
+      const dispatchChanges = (newlyArrived.length ? newlyArrived : incomingUpdates)
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+      if (dispatchChanges.length) {
+        const latestChangedIncident = dispatchChanges[0];
+        const storedIndex = state.incidents.findIndex((incident) => incident.id === latestChangedIncident.id);
+        if (storedIndex >= 0) state.incidents[storedIndex] = latestChangedIncident;
+        else if (append === false) state.incidents.unshift(latestChangedIncident);
+        if (!state.hold && state.view === 'dispatch') {
+          state.dispatchIncidentId = latestChangedIncident.id;
+          state.dispatchIncident = latestChangedIncident;
+        }
+        if (newlyArrived.length) handleNewIncidents(newlyArrived.length);
       }
     }
     if (announce && !append && state.lastSignature && signature !== state.lastSignature) state.changeCount += 1;
@@ -118,12 +134,11 @@ async function loadIncidents({ announce = false, append = false } = {}) {
       for (const incident of incidents) merged.set(incident.id, incident);
       state.incidents = [...merged.values()];
     } else {
-      const currentPage = new Map(incidents.map((incident) => [incident.id, incident]));
-      for (const incident of state.incidents) if (!currentPage.has(incident.id)) currentPage.set(incident.id, incident);
-      state.incidents = [...currentPage.values()];
+      state.incidents = incidents;
       state.lastSignature = signature;
       state.hasLoadedSnapshot = true;
       if (!state.dispatchIncidentId) state.dispatchIncidentId = incidents.find(matchesDispatchFilters)?.id ?? null;
+      state.dispatchIncident = state.incidents.find((incident) => incident.id === state.dispatchIncidentId) ?? null;
     }
     state.nextOffset = offset + incidents.length;
     state.total = Number(result.page?.total) || incidents.length;
@@ -226,7 +241,7 @@ function buildEntries() {
       entries.push({
         id: `${incident.id}:community:${note.id}`, incidentId: incident.id, kind: 'community', at: note.createdAt,
         incident, agency: incident.agency, borough: incident.borough, author: note.username,
-        audience: note.audience, title: 'COMMUNITY NOTE · UNVERIFIED', summary: note.message,
+        audience: note.audience, role: note.role, title: 'COMMUNITY NOTE · UNVERIFIED', summary: note.message,
         location: '', units: [], boxes: []
       });
     }
@@ -267,9 +282,12 @@ function render() {
   let visible = entries.filter((entry) => state.view === 'history'
     || (state.view === 'incidents' && entry.kind === 'new')
     || (state.view === 'updates' && entry.kind === 'update'));
+  if (state.view === 'history' && state.historyClearedAt !== null) {
+    visible = visible.filter((entry) => Date.parse(entry.at) >= state.historyClearedAt);
+  }
   if (state.view === 'dispatch' && state.dispatchIncidentId) {
     visible = entries.filter((entry) => entry.incidentId === state.dispatchIncidentId);
-    state.dispatchIncident = state.incidents.find((incident) => incident.id === state.dispatchIncidentId) ?? null;
+    state.dispatchIncident = state.incidents.find((incident) => incident.id === state.dispatchIncidentId) ?? state.dispatchIncident;
     state.currentIncidentId = state.dispatchIncident?.id ?? null;
   } else {
     state.currentIncidentId = null;
@@ -297,14 +315,27 @@ function render() {
   $('#mdt-history-position').textContent = state.incidents.length ? `SHOWING ${state.incidents.length} OF ${state.total} INCIDENT RECORDS` : '';
   $('#mdt-changes').textContent = String(state.changeCount);
   if (!visible.length) {
-    output.innerHTML = '<div class="stream-empty">NO MATCHING PUBLISHED INCIDENTS</div>';
+    output.innerHTML = `<div class="stream-empty">${state.view === 'history' && state.historyClearedAt !== null ? 'COMMAND HISTORY CLEARED · NEWER ACTIVITY WILL APPEAR HERE' : 'NO MATCHING PUBLISHED INCIDENTS'}</div>`;
     updateXmitControls();
     return;
   }
   let currentDay = '';
   const markup = [];
   if (state.view === 'dispatch') {
-    markup.push(`<div class="dispatch-mode-notice ${state.hold ? 'hold-active' : ''}">${state.hold ? 'HOLD ACTIVE · CURRENT CALL FROZEN · NEW CALLS QUEUED' : 'HOLD OFF · NEXT NEW CALL REPLACES THIS DISPLAY'}</div>`);
+    markup.push(`<div class="dispatch-mode-notice ${state.hold ? 'hold-active' : ''}">${state.hold ? 'HOLD ACTIVE · CURRENT CALL FROZEN · NEW CALLS / UPDATES QUEUED' : 'HOLD OFF · NEXT NEW CALL OR MATCHED UPDATE REPLACES THIS DISPLAY'}</div>`);
+    const activeIncident = visible.find((entry) => entry.kind === 'new')?.incident;
+    if (activeIncident?.updates?.length) {
+      for (const [index, update] of activeIncident.updates.entries()) {
+        visible.push({
+          id: `${activeIncident.id}:update:${index}`, incidentId: activeIncident.id, kind: 'update',
+          at: update.occurredAt, incident: activeIncident, agency: update.agency || activeIncident.agency,
+          borough: activeIncident.borough, title: update.headline || 'Incident update', summary: update.summary,
+          location: update.location, previousLocation: update.previousLocation,
+          units: update.unitIds || [], boxes: update.boxNumbers || []
+        });
+      }
+      visible.sort((left, right) => Date.parse(left.at) - Date.parse(right.at) || left.id.localeCompare(right.id));
+    }
   }
   for (const entry of visible) {
     const day = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'long', day: '2-digit', year: 'numeric' }).format(new Date(entry.at));
@@ -319,10 +350,10 @@ function render() {
       entry.previousLocation ? `<span><strong>PREVIOUS LOCATION</strong> ${escapeHtml(entry.previousLocation)}</span>` : ''
     ].filter(Boolean).join('');
     if (entry.kind === 'community') {
-      const audienceLabel = entry.audience === 'buff' ? 'BUFF' : 'NEWS MEDIA';
+      const audienceLabel = communityNoteRoleLabel(entry);
       markup.push(`<article class="incident-entry entry-community-note" data-entry-id="${escapeHtml(entry.id)}">
         <div class="entry-topline"><time class="entry-time">${escapeHtml(formatStamp(entry.at))}</time><strong class="community-note-author">@${escapeHtml(entry.author)}</strong><span class="community-note-warning">COMMUNITY · UNVERIFIED</span></div>
-        <p class="entry-summary">${escapeHtml(entry.summary)} <span class="community-note-role ${entry.audience === 'buff' ? 'buff' : 'news'}">${audienceLabel}</span></p></article>`);
+        <p class="entry-summary">${escapeHtml(entry.summary)} <span class="community-note-role ${communityNoteRoleClass(entry)}">${escapeHtml(audienceLabel)}</span></p></article>`);
       continue;
     }
     markup.push(`<article class="incident-entry ${entry.kind === 'update' ? 'entry-update' : ''}" data-entry-id="${escapeHtml(entry.id)}">
@@ -430,11 +461,19 @@ function wireControls() {
   $('#mdt-zoom').addEventListener('click', () => $('#mdt-workspace').classList.toggle('zoomed'));
   $('#mdt-prev-entry').addEventListener('click', () => $('#incident-stream').scrollBy({ top: -$('#incident-stream').clientHeight, behavior: 'smooth' }));
   $('#mdt-clear-screen').addEventListener('click', () => {
-    $('#console-output').replaceChildren();
+    if (state.view === 'history') {
+      state.historyClearedAt = Date.now();
+      try { sessionStorage.setItem('nyc-alert-mdt-history-cleared-at', String(state.historyClearedAt)); }
+      catch { /* Keep the clear cutoff for this page session if storage is unavailable. */ }
+      render();
+    } else {
+      $('#console-output').replaceChildren();
+    }
     $('#mdt-load-older').hidden = true;
   });
   $('#mdt-hold').addEventListener('click', () => {
     state.hold = !state.hold;
+    state.incidentRevision += 1;
     const button = $('#mdt-hold');
     button.classList.toggle('active', state.hold);
     button.setAttribute('aria-pressed', String(state.hold));
@@ -541,12 +580,12 @@ async function loadMdtSession() {
 
 function updateXmitControls() {
   const account = state.authSession?.account;
-  const canSubmit = state.authSession?.kind === 'user' && ['buff', 'news'].includes(account?.accountType);
+  const canSubmit = state.authSession?.kind === 'admin'
+    || (state.authSession?.kind === 'user' && ['buff', 'news'].includes(account?.accountType));
   const enabled = Boolean(canSubmit && state.currentIncidentId && state.view === 'dispatch' && !state.xmitBusy);
   const messageInput = $('#mdt-community-message');
-  const showComposer = canSubmit
-    ? Boolean(state.currentIncidentId && state.view === 'dispatch')
-    : state.xmitPrompted;
+  const showComposer = state.xmitPrompted
+    && (canSubmit ? Boolean(state.currentIncidentId && state.view === 'dispatch') : !state.authSession);
   messageInput.hidden = !showComposer;
   messageInput.disabled = !enabled;
   $('.mdt-status').classList.toggle('composer-visible', showComposer);
@@ -554,6 +593,16 @@ function updateXmitControls() {
   $('#mdt-xmit').disabled = state.xmitBusy;
   $('#mdt-logon').textContent = 'LOGON';
   $('#mdt-logon').title = state.authSession?.account?.username ? `Signed in as @${state.authSession.account.username}` : 'Log in';
+}
+
+function communityNoteRoleLabel(note) {
+  if (note.role === 'owner') return 'ADMIN';
+  if (note.role) return note.role.toUpperCase();
+  return note.audience === 'buff' ? 'BUFF' : 'NEWS MEDIA';
+}
+
+function communityNoteRoleClass(note) {
+  return note.role ? `staff-${note.role}` : note.audience === 'buff' ? 'buff' : 'news';
 }
 
 function showMdtFeedback(message, isError = false) {
@@ -590,14 +639,16 @@ async function submitMdtLogin(event) {
     if (!response.ok) throw new Error(result.error || 'Could not log in.');
     state.authRevision += 1;
     state.authSession = result.session;
-    state.xmitPrompted = false;
     closeLogonModal();
     updateXmitControls();
     const account = state.authSession?.account;
-    if (state.authSession?.kind !== 'user' || !['buff', 'news'].includes(account?.accountType)) {
-      showMdtFeedback('LOGGED IN · XMIT REQUIRES BUFF OR NEWS MEDIA ACCESS', true);
+    if (state.authSession?.kind === 'user' && !['buff', 'news'].includes(account?.accountType)) {
+      showMdtFeedback('XMIT IS AVAILABLE TO BUFF, NEWS MEDIA, AND STAFF ACCOUNTS', true);
     } else {
-      showMdtFeedback(`LOGGED ON · @${account.username} · ${account.accountType === 'buff' ? 'BUFF' : 'NEWS MEDIA'}`);
+      const role = state.authSession?.kind === 'admin'
+        ? ` · ${state.authSession.role === 'owner' ? 'ADMIN' : state.authSession.role?.toUpperCase() || 'ADMIN'}`
+        : ` · ${account.accountType === 'buff' ? 'BUFF' : 'NEWS MEDIA'}`;
+      showMdtFeedback(`LOGGED ON · ${account?.username ? `@${account.username}` : 'ADMINISTRATOR'}${role}`);
     }
     if (state.started) render();
   } catch (error) {
@@ -631,8 +682,8 @@ async function submitCommunityNote(event) {
     showMdtFeedback('LOGON REQUIRED · USE THE LOGON KEY');
     return;
   }
-  if (state.authSession.kind !== 'user' || !['buff', 'news'].includes(state.authSession.account?.accountType)) {
-    showMdtFeedback('BUFF OR NEWS MEDIA ACCESS REQUIRED TO XMIT', true);
+  if (state.authSession.kind === 'user' && !['buff', 'news'].includes(state.authSession.account?.accountType)) {
+    showMdtFeedback('XMIT IS AVAILABLE TO BUFF, NEWS MEDIA, AND STAFF ACCOUNTS', true);
     return;
   }
   if (!state.currentIncidentId || state.view !== 'dispatch') {
@@ -680,6 +731,11 @@ try {
     state.selectedAgencies = savedFilters.agencies;
   }
 } catch { /* Use all boroughs and agencies when saved settings cannot be read. */ }
+
+try {
+  const clearedAt = Number(sessionStorage.getItem('nyc-alert-mdt-history-cleared-at'));
+  if (Number.isFinite(clearedAt) && clearedAt > 0) state.historyClearedAt = clearedAt;
+} catch { /* Command history starts uncleared when session storage is unavailable. */ }
 
 wireControls();
 document.addEventListener('pointerdown', retryQueuedAudioAfterGesture, true);

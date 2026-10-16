@@ -457,20 +457,26 @@ export class DashboardServer {
         return true;
       }
       const session = this.accounts.getSession(this.readSessionToken(request));
-      if (session?.kind !== 'user') {
-        json(response, 401, { error: 'Log in with an approved Buff or News Media account to XMIT a community note.' });
+      if (!session) {
+        json(response, 401, { error: 'Log in with an approved Buff/News Media account or staff account to XMIT a community note.' });
         return true;
       }
-      if (session.account.accountType !== 'buff' && session.account.accountType !== 'news') {
-        json(response, 403, { error: 'Only Buff and News Media accounts can XMIT community notes.' });
+      const userAudience = session.kind === 'user'
+        && (session.account.accountType === 'buff' || session.account.accountType === 'news')
+        ? session.account.accountType
+        : undefined;
+      const staffRole = session.kind === 'admin' ? session.role : undefined;
+      if (!userAudience && !staffRole) {
+        json(response, 403, { error: 'XMIT is available to approved Buff, News Media, administrator, moderator, and reviewer accounts.' });
         return true;
       }
       if (!this.hasSameOrigin(request)) {
         json(response, 403, { error: 'Request origin was not accepted.' });
         return true;
       }
+      const accountRateIdentity = session.account?.id ?? `staff-${staffRole}`;
       if (!this.takeRateLimit(request, 'community-incident-note', 30, 60_000)
-        || !this.takeRateLimit(request, `community-incident-note-account:${session.account.id}`, 5, 60 * 60_000, 'global')) {
+        || !this.takeRateLimit(request, `community-incident-note-account:${accountRateIdentity}`, 5, 60 * 60_000, 'global')) {
         json(response, 429, { error: 'Community notes are rate-limited. Try again later.' });
         return true;
       }
@@ -481,17 +487,17 @@ export class DashboardServer {
           json(response, 400, { error: 'Enter a community note of 1–500 printable characters.' });
           return true;
         }
-        const audience = session.account.accountType;
         const note = this.store.addCommunityIncidentNote(communityNoteMatch[1]!, {
-          username: session.account.username,
-          audience,
+          username: session.account?.username ?? (staffRole === 'owner' ? 'owner' : 'admin'),
+          ...(userAudience ? { audience: userAudience } : {}),
+          ...(staffRole ? { role: staffRole } : {}),
           message
         });
         if (!note) {
           json(response, 404, { error: 'Incident not found.' });
           return true;
         }
-        logger.info({ action: 'community-incident-note-created', incidentId: communityNoteMatch[1], accountId: session.account.id, noteId: note.id, audience }, 'Community note added to incident');
+        logger.info({ action: 'community-incident-note-created', incidentId: communityNoteMatch[1], accountId: session.account?.id, noteId: note.id, audience: userAudience, role: staffRole }, 'Community note added to incident');
         json(response, 201, { note });
       } catch (error) {
         json(response, 400, { error: error instanceof Error ? error.message : 'Could not add the community note.' });

@@ -131,7 +131,9 @@ describe('DashboardServer account routes', () => {
       assert.match(html, /id="mdt-incident-alert"/);
       assert.match(html, /src="\/fdny_mdt_run\.mp3"/);
       assert.match(html, /id="mdt-xmit-form"/);
+      assert.match(html, /administrator, moderator, or reviewer account, to XMIT a community note/);
       assert.match(html, /id="mdt-refresh"[^>]*>XMIT/);
+      assert.match(html, /administrator, moderator, or reviewer account, to XMIT a community note/);
       assert.match(html, /id="mdt-xmit"[^>]*>XMIT<\/button><time id="mdt-clock"/);
       assert.doesNotMatch(html, /id="mdt-last-sync"/);
       assert.doesNotMatch(html, /id="mdt-last-sync"/);
@@ -150,6 +152,8 @@ describe('DashboardServer account routes', () => {
       const emscadStylesText = await emscadStyles.text();
       assert.match(emscadStylesText, /grid-template-columns:1\.3fr/);
       assert.match(emscadStylesText, /\.status-xmit/);
+      assert.match(emscadStylesText, /\.mdt-status\.composer-visible>span:first-child\{display:none\}/);
+      assert.match(emscadStylesText, /\.mdt-status\.composer-visible>span:first-child\{display:none\}/);
       assert.match(emscadStylesText, /\.mdt-status\{grid-column:1\/-1;grid-row:2;display:flex/);
       assert.match(emscadStylesText, /\.status-xmit\{order:2/);
       assert.match(emscadStylesText, /\.mdt-status time\{order:3/);
@@ -159,7 +163,7 @@ describe('DashboardServer account routes', () => {
       assert.equal(alertAudio.status, 200);
       assert.match(alertAudio.headers.get('content-type') ?? '', /audio\/mpeg/);
       assert.ok((await alertAudio.arrayBuffer()).byteLength > 0);
-      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-9`);
+      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-13`);
       assert.equal(script.status, 200);
       const source = await script.text();
       assert.match(source, /incidents-updated/);
@@ -173,8 +177,15 @@ describe('DashboardServer account routes', () => {
       assert.match(source, /if \(!state\.started \|\| state\.hold\) return/);
       assert.match(source, /state\.selectedBoroughs/);
       assert.match(source, /state\.selectedAgencies/);
-      assert.match(source, /NEXT NEW CALL REPLACES THIS DISPLAY/);
-      assert.match(source, /state\.dispatchIncidentId = newlyArrived\[0\]\.id/);
+      assert.match(source, /NEXT NEW CALL OR MATCHED UPDATE REPLACES THIS DISPLAY/);
+      assert.match(source, /const incomingUpdates = incidents\.filter/);
+      assert.match(source, /state\.dispatchIncidentId = latestChangedIncident\.id/);
+      assert.match(source, /const incomingUpdates = incidents\.filter/);
+      assert.match(source, /const canSubmit = state\.authSession\?\.kind === 'admin'/);
+      assert.match(source, /state\.xmitPrompted/);
+      assert.match(source, /nyc-alert-mdt-history-cleared-at/);
+      assert.match(source, /COMMAND HISTORY CLEARED/);
+      assert.match(source, /const canSubmit = state\.authSession\?\.kind === 'admin'/);
       assert.match(source, /matchesDispatchFilters\(incident\)/);
       assert.match(source, /function loadPremiseHistory/);
       assert.match(source, /normalizePremiseLocation\(incident\.location\)/);
@@ -443,7 +454,8 @@ describe('DashboardServer account routes', () => {
     });
     const initialUpdatedAt = incident.updatedAt;
     const server = new DashboardServer(store, port, '127.0.0.1', undefined, accounts, {
-      publicUrl: origin, trustProxy: true, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+      publicUrl: origin, trustProxy: true, adminEmail: 'community-admin@example.test', adminPassword: 'community-admin-password-long',
+      smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
     });
     await server.start();
     try {
@@ -481,6 +493,26 @@ describe('DashboardServer account routes', () => {
       assert.equal(data.data.communityNotes.length, 1);
       assert.equal(data.data.updateCount, 0);
       assert.equal(data.data.updatedAt, initialUpdatedAt);
+
+      const adminLogin = await fetch(`${origin}/api/auth/login`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'community-admin@example.test', password: 'community-admin-password-long' })
+      });
+      assert.equal(adminLogin.status, 200);
+      const adminCookie = adminLogin.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(adminCookie);
+      const adminNoteResponse = await fetch(endpoint, {
+        method: 'POST', headers: { Origin: origin, Cookie: adminCookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Staff follow-up from admin.' })
+      });
+      assert.equal(adminNoteResponse.status, 201);
+      const adminNote = (await adminNoteResponse.json() as { note: { username: string; role: string } }).note;
+      assert.equal(adminNote.username, 'owner');
+      assert.equal(adminNote.role, 'owner');
+      const afterAdminNote = await fetch(`${origin}/api/v1/incidents/${incident.id}`);
+      const afterAdminData = await afterAdminNote.json() as { data: { updateCount: number; communityNotes: unknown[] } };
+      assert.equal(afterAdminData.data.communityNotes.length, 2);
+      assert.equal(afterAdminData.data.updateCount, 0);
     } finally { await server.stop(); }
   });
 

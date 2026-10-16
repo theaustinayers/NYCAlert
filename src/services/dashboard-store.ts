@@ -37,7 +37,8 @@ export interface DashboardIncidentInput {
 export interface CommunityIncidentNote {
   id: string;
   username: string;
-  audience: 'buff' | 'news';
+  audience?: 'buff' | 'news';
+  role?: 'owner' | 'admin' | 'moderator' | 'reviewer';
   message: string;
   createdAt: string;
 }
@@ -484,12 +485,13 @@ export class DashboardStore {
     return updated;
   }
 
-  addCommunityIncidentNote(incidentId: string, input: { username: string; audience: 'buff' | 'news'; message: string }): CommunityIncidentNote | undefined {
+  addCommunityIncidentNote(incidentId: string, input: { username: string; audience?: 'buff' | 'news'; role?: 'owner' | 'admin' | 'moderator' | 'reviewer'; message: string }): CommunityIncidentNote | undefined {
     if (!this.getIncident(incidentId)) return undefined;
     const note: CommunityIncidentNote = {
       id: randomUUID(),
       username: input.username.trim().slice(0, 24),
-      audience: input.audience,
+      ...(input.audience ? { audience: input.audience } : {}),
+      ...(input.role ? { role: input.role } : {}),
       message: input.message.trim().replace(/[\r\n\t]+/g, ' ').slice(0, 500),
       createdAt: new Date().toISOString()
     };

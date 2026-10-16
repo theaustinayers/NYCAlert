@@ -96,7 +96,7 @@ function renderCommunityNotes(notes) {
   const section = document.createElement('section');
   section.className = 'incident-community-notes';
   section.setAttribute('aria-label', 'Unverified community notes');
-  section.innerHTML = `<h2>Community notes <span>UNVERIFIED</span></h2><ol>${items.map((note) => `<li><div><time>${escapeHtml(formatTime(note.createdAt))}</time><strong>@${escapeHtml(note.username)}</strong></div><p>${escapeHtml(note.message)}</p><span class="community-note-role ${note.audience === 'buff' ? 'buff' : 'news'}">${note.audience === 'buff' ? 'BUFF' : 'NEWS MEDIA'}</span></li>`).join('')}</ol>`;
+  section.innerHTML = `<h2>Community notes <span>UNVERIFIED</span></h2><ol>${items.map((note) => `<li><div><time>${escapeHtml(formatTime(note.createdAt))}</time><strong>@${escapeHtml(note.username)}</strong></div><p>${escapeHtml(note.message)}</p><span class="community-note-role ${note.role ? `staff-${escapeHtml(note.role)}` : note.audience === 'buff' ? 'buff' : 'news'}">${note.role ? note.role === 'owner' ? 'ADMIN' : escapeHtml(note.role.toUpperCase()) : note.audience === 'buff' ? 'BUFF' : 'NEWS MEDIA'}</span></li>`).join('')}</ol>`;
   root.append(section);
 }
 
