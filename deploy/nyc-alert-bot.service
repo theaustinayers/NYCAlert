@@ -14,11 +14,12 @@ Restart=on-failure
 RestartSec=5
 StateDirectory=nyc-alert-bot
 UMask=0077
+SupplementaryGroups=postdrop
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/nyc-alert-bot
+ReadWritePaths=/var/lib/nyc-alert-bot /var/spool/postfix/maildrop
 
 [Install]
 WantedBy=multi-user.target

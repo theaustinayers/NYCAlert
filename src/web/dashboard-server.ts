@@ -684,7 +684,7 @@ export class DashboardServer {
             });
           } catch (error) {
             await this.accounts.deleteAccount(registered.account.id);
-            logger.error({ error }, 'Could not send account verification email');
+            logger.error({ err: error }, 'Could not send account verification email');
             json(response, 503, { error: 'Verification email could not be sent. Please check back later.' });
             return true;
           }
@@ -1073,7 +1073,7 @@ export class DashboardServer {
             });
           } catch (error) {
             await this.accounts.deleteAdministrator(invitation.account.id);
-            logger.error({ error }, 'Could not send administrator invitation email');
+            logger.error({ err: error }, 'Could not send administrator invitation email');
             json(response, 503, { error: 'Invitation email could not be sent. Please check back later.' });
             return true;
           }

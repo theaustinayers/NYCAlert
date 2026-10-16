@@ -174,11 +174,12 @@ ExecStart=${NPM_PATH} start
 Restart=on-failure
 RestartSec=5
 UMask=0077
+SupplementaryGroups=postdrop
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/nyc-alert-bot ${APP_DIR}/dist
+ReadWritePaths=/var/lib/nyc-alert-bot ${APP_DIR}/dist /var/spool/postfix/maildrop
 
 [Install]
 WantedBy=multi-user.target
