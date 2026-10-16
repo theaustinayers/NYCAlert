@@ -50,6 +50,7 @@ const schema = z.object({
   TRIAGE_MODEL: z.string().default('gpt-4o-mini'),
   DASHBOARD_HOST: z.string().default('0.0.0.0'),
   DASHBOARD_PUBLIC_URL: z.string().url().default('https://nycalert.ai'),
+  DASHBOARD_READ_API_ORIGINS: z.string().default(''),
   TRUST_PROXY: z.string().default('false'),
   DASHBOARD_PORT: z.preprocess(
     (value) => value === '' ? undefined : value,
@@ -86,6 +87,18 @@ if (configuredOAuth1Values.some(Boolean) && !configuredOAuth1Values.every(Boolea
 }
 if (parsed.data.X_AUTO_POST_ENABLED === 'true' && parsed.data.X_USER_ACCESS_TOKEN && configuredOAuth1Values.some(Boolean)) {
   throw new Error('Configure either X_USER_ACCESS_TOKEN or OAuth 1.0a user credentials, not both.');
+}
+
+function parseReadApiOrigins(value: string): string[] {
+  return value.split(',').map((item) => item.trim()).filter(Boolean).map((item) => {
+    let url: URL;
+    try { url = new URL(item); } catch { throw new Error('DASHBOARD_READ_API_ORIGINS must contain comma-separated HTTPS origins.'); }
+    const localHttp = url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    if ((!localHttp && url.protocol !== 'https:') || url.origin !== item || url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
+      throw new Error('DASHBOARD_READ_API_ORIGINS entries must be exact HTTPS origins (HTTP is allowed only for localhost development).');
+    }
+    return url.origin;
+  });
 }
 
 export const config = {
@@ -134,6 +147,7 @@ export const config = {
   triageModel: parsed.data.TRIAGE_MODEL,
   dashboardHost: parsed.data.DASHBOARD_HOST,
   dashboardPublicUrl: parsed.data.DASHBOARD_PUBLIC_URL.replace(/\/$/, ''),
+  dashboardReadApiOrigins: parseReadApiOrigins(parsed.data.DASHBOARD_READ_API_ORIGINS),
   trustProxy: parsed.data.TRUST_PROXY === 'true',
   dashboardPort: parsed.data.DASHBOARD_PORT,
   dashboardPublicAudio: parsed.data.DASHBOARD_PUBLIC_AUDIO === 'true',

@@ -7,6 +7,8 @@ const state = {
   map: null, mapLayer: null, mapMarkers: new Map(), mapHasFitBounds: false, mapTimer: null, mapExpiryTimer: null, mapEvents: null,
   mapRefreshTimer: null, mapRefreshSequence: 0, liveUpdates: null, authSession: null, pendingAudience: null,
   preferenceSaveTimer: null, preferenceSaveQueue: Promise.resolve(), applyingPreferences: false, presenceTimer: null,
+  lastCommunityPromptAt: 0, communityPromptTimer: null,
+  incidentPopupEnabled: true, incidentArrivalTimer: null, incidentArrivalId: null, callTypeFilter: 'all',
   feedMeterTargets: new Map(), feedMeterAnimationFrame: 0, lastFeedMeterFrameAt: 0
 };
 const voteDeviceId = getVoteDeviceId();
@@ -15,6 +17,15 @@ const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const boroughCode = (borough) => ({ Manhattan: 'MH', Bronx: 'BX', Queens: 'QN', Brooklyn: 'BK', 'Staten Island': 'SI', Citywide: 'CW' })[borough] || borough;
 const categoryLabel = (category) => String(category ?? 'routine').replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+const callTypeLabel = (type) => ({ fire: 'Fire', ems: 'EMS', pd: 'PD' })[type] || '';
+function getCallType(item) {
+  if (['fire', 'ems', 'pd'].includes(item?.callType)) return item.callType;
+  if (item?.incidentType === 'fire') return 'fire';
+  if (item?.incidentType === 'medical') return 'ems';
+  if (item?.incidentType === 'police') return 'pd';
+  if (item?.incidentType === 'vehicle') return item.agency === 'FDNY' ? 'fire' : item.agency === 'NYPD' ? 'pd' : undefined;
+  return undefined;
+}
 const boroughNames = ['Manhattan', 'Queens', 'Brooklyn', 'Bronx', 'Staten Island'];
 const boroughParams = new URLSearchParams(location.search);
 const requestedBoroughs = boroughParams.getAll('borough');
@@ -292,6 +303,7 @@ function isRecent(value) {
 
 function renderIncidents() {
   const visible = state.incidents
+    .filter((incident) => state.callTypeFilter === 'all' || getCallType(incident) === state.callTypeFilter)
     .filter((incident) => state.boroughs.has(incident.borough) || (state.boroughs.size > 0 && incident.borough === 'Citywide'))
     .filter((incident) => state.agency === 'all' || (incident.agencies?.includes(state.agency) ?? incident.agency === state.agency))
     .sort(compareIncidents);
@@ -310,11 +322,12 @@ function renderIncidents() {
     const buffScore = Math.round(Math.max(1, Math.min(5, Number(incident.buffInterestScore) || newsScore)));
     const deskScore = Math.round(Math.max(1, Math.min(5, Number(incident.assignmentDeskScore) || newsScore)));
     const audienceScore = state.audience === 'buff' ? buffScore : state.audience === 'news' ? deskScore : newsScore;
+    const topType = getCallType(incident);
     const isBreaking = newsScore === 5;
       const presentation = newsScore >= 5 ? 'BREAKING' : newsScore >= 4 ? 'DEVELOPING' : newsScore >= 3 ? 'INCIDENT' : newsScore >= 2 ? 'ACTIVITY' : 'NONE';
     return `
-    <article class="incident-card category-${isBreaking ? 'breaking' : 'newsworthy'} ${state.freshIncidentIds.has(incident.id) && state.freshIncidentIds.get(incident.id) > Date.now() ? 'is-new-incident' : ''}" data-incident-card-id="${escapeHtml(incident.id)}">
-      <div class="incident-meta"><span class="category-tag ${isBreaking ? 'breaking' : newsScore >= 4 ? 'developing' : 'newsworthy'}">${presentation}</span><span class="borough-tag">${escapeHtml((incident.agencies?.length ? incident.agencies : [incident.agency]).join(' + '))} · ${escapeHtml(boroughCode(incident.borough))}</span><time class="incident-time">${escapeHtml(formatTime(incident.occurredAt))}</time></div>
+    <article class="incident-card category-${isBreaking ? 'breaking' : 'newsworthy'} ${state.freshIncidentIds.has(incident.id) && state.freshIncidentIds.get(incident.id) > Date.now() ? 'is-new-incident' : ''} ${state.incidentArrivalId === incident.id ? 'is-arrival-highlight' : ''}" data-incident-card-id="${escapeHtml(incident.id)}">
+      <div class="incident-meta"><span class="category-tag ${isBreaking ? 'breaking' : newsScore >= 4 ? 'developing' : 'newsworthy'}">${presentation}</span>${topType ? `<span class="call-type-badge call-type-${topType}">${callTypeLabel(topType)}</span>` : ''}<span class="borough-tag">${escapeHtml((incident.agencies?.length ? incident.agencies : [incident.agency]).join(' + '))} · ${escapeHtml(boroughCode(incident.borough))}</span><time class="incident-time">${escapeHtml(formatTime(incident.occurredAt))}</time></div>
       <h3>${escapeHtml(incident.title)}</h3><p>${escapeHtml(incident.summary)}</p>
       ${incident.communitySelected ? '<p class="community-selected-note">COMMUNITY SELECTED · NOT INDEPENDENTLY VERIFIED</p>' : ''}
       <p class="incident-location ${incident.location ? '' : 'missing'}"><strong>Address / cross streets:</strong> ${escapeHtml(incident.location || 'Not stated clearly in the transmission')}</p>
@@ -475,6 +488,9 @@ function trackNewIncidents(incidents) {
     state.freshIncidentIds.set(incident.id, now + 25_000);
     if (state.freshIncidentIds.size > 100) state.freshIncidentIds.delete(state.freshIncidentIds.keys().next().value);
     enqueueIncidentTicker(incident, 'new');
+  }
+  if (newlySeen.length && state.incidentPopupEnabled && document.visibilityState === 'visible') {
+    showIncidentArrivalPopup(newlySeen[0]);
   }
   const updated = incidents.filter((incident) => state.incidentIds.has(incident.id)
     && (Number(incident.updateCount) || 0) > (state.incidentUpdateCounts.get(incident.id) || 0));
@@ -662,6 +678,9 @@ function initializeLiveUpdates() {
   });
   events.addEventListener('live-calls-updated', () => { void refreshLiveCalls(); });
   events.addEventListener('feeds-updated', () => { void refreshFeedTelemetry(); });
+  events.addEventListener('community-upvote', (event) => {
+    try { showCommunityReviewPrompt(JSON.parse(event.data)); } catch { /* Ignore malformed advisory events. */ }
+  });
   events.addEventListener('open', () => {
     $('#system-state').textContent = 'ONLINE';
     scheduleMapRefresh();
@@ -671,6 +690,58 @@ function initializeLiveUpdates() {
     if (state.map) $('#map-refresh-label').textContent = 'LIVE MAP RECONNECTING';
   });
 }
+
+function showCommunityReviewPrompt(event) {
+  if (!event || !['incident', 'live-call'].includes(event.kind) || typeof event.id !== 'string'
+    || !/^[0-9a-f-]{36}$/i.test(event.id) || typeof event.title !== 'string') return;
+  const now = Date.now();
+  if (now - state.lastCommunityPromptAt < 20_000 || document.visibilityState !== 'visible') return;
+  state.lastCommunityPromptAt = now;
+  const prompt = $('#community-review-prompt');
+  const action = $('#community-review-action');
+  $('#community-review-call').textContent = `${event.title} · ${event.agency} · ${boroughCode(event.borough)}`;
+  action.textContent = event.kind === 'live-call' ? 'Review Live Radio call →' : 'Review incident →';
+  action.href = event.kind === 'incident' ? `/incident/${encodeURIComponent(event.id)}` : '#live-radio-review';
+  action.dataset.liveCallId = event.kind === 'live-call' ? event.id : '';
+  prompt.hidden = false;
+  if (state.communityPromptTimer) clearTimeout(state.communityPromptTimer);
+  state.communityPromptTimer = setTimeout(() => { prompt.hidden = true; }, 16_000);
+}
+
+async function focusCommunityLiveCall(id) {
+  state.boroughs = new Set(boroughNames);
+  state.agency = 'all';
+  state.liveCategories = null;
+  state.query = '';
+  $('#search').value = '';
+  document.querySelectorAll('[data-filter]').forEach((button) => {
+    const selected = button.dataset.filter === 'all';
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
+  initializeBoroughPage();
+  renderLiveCalls();
+  setView('live');
+  await refreshLiveCalls();
+  const card = document.querySelector(`[data-live-call-card-id="${CSS.escape(id)}"]`);
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('community-review-target');
+    setTimeout(() => card.classList.remove('community-review-target'), 4_000);
+  }
+  $('#community-review-prompt').hidden = true;
+}
+
+$('#community-review-close').addEventListener('click', () => {
+  $('#community-review-prompt').hidden = true;
+  if (state.communityPromptTimer) clearTimeout(state.communityPromptTimer);
+});
+$('#community-review-action').addEventListener('click', (event) => {
+  const id = event.currentTarget.dataset.liveCallId;
+  if (!id) return;
+  event.preventDefault();
+  void focusCommunityLiveCall(id);
+});
 
 function initializeMap() {
   if (!window.L || state.map) return;
@@ -688,6 +759,7 @@ function initializeMap() {
 function renderLiveCalls() {
   const visible = state.calls.filter((call) => (state.boroughs.has(call.borough) || (state.boroughs.size > 0 && call.borough === 'Citywide'))
     && (state.agency === 'all' || call.agency === state.agency)
+    && (state.callTypeFilter === 'all' || getCallType(call) === state.callTypeFilter)
     && (!state.liveCategories || state.liveCategories.has(call.category)));
   renderLiveCategoryControls(visible.length);
   if (!visible.length) {
@@ -697,7 +769,7 @@ function renderLiveCalls() {
   }
   const cards = visible.map((call) => `
     <article class="live-call-card" data-live-call-card-id="${escapeHtml(call.id)}">
-      <div class="live-call-head"><span class="category-tag ${escapeHtml(call.category)}">${escapeHtml(categoryLabel(call.category))}</span><span class="borough-tag">${escapeHtml(call.agency)} · ${escapeHtml(boroughCode(call.borough))}</span><time>${escapeHtml(formatTime(call.occurredAt))}</time></div>
+      <div class="live-call-head"><span class="category-tag ${escapeHtml(call.category)}">${escapeHtml(categoryLabel(call.category))}</span>${getCallType(call) ? `<span class="call-type-badge call-type-${getCallType(call)}">${callTypeLabel(getCallType(call))}</span>` : ''}<span class="borough-tag">${escapeHtml(call.agency)} · ${escapeHtml(boroughCode(call.borough))}</span><time>${escapeHtml(formatTime(call.occurredAt))}</time></div>
       <div class="live-call-title">${escapeHtml(call.groupName || `${call.agency} radio transmission`)}</div><div class="live-call-ref">${escapeHtml(call.sourceId)}</div>
       <div class="live-call-generated-title"><span>AI CALL TITLE</span><strong>${escapeHtml(call.headline || call.summary || 'Radio call')}</strong></div>
       ${call.transcript ? `<div class="live-transcript">${escapeHtml(call.transcript)}</div>` : '<div class="transcript-unavailable">Transcript is not publicly exposed. Set DASHBOARD_PUBLIC_TRANSCRIPTS=true only after reviewing privacy and retention requirements.</div>'}
@@ -902,6 +974,8 @@ async function heartbeatPresence() {
 }
 
 async function initialize() {
+  initializeIncidentPopupControls();
+  initializeCallTypeFilters();
   wireAuthControls();
   wireIncidentShareControls();
   wireIncidentVoting();
@@ -936,16 +1010,72 @@ async function initialize() {
   setInterval(refresh, 15000);
 }
 
+function initializeCallTypeFilters() {
+  document.querySelectorAll('[data-call-type]').forEach((button) => button.addEventListener('click', () => {
+    state.callTypeFilter = ['fire', 'ems', 'pd'].includes(button.dataset.callType) ? button.dataset.callType : 'all';
+    document.querySelectorAll('[data-call-type]').forEach((item) => {
+      const selected = item.dataset.callType === state.callTypeFilter;
+      item.classList.toggle('active', selected);
+      item.setAttribute('aria-pressed', String(selected));
+    });
+    renderIncidents();
+    renderLiveCalls();
+  }));
+}
+
+function initializeIncidentPopupControls() {
+  const key = 'nycalert-incident-popup-enabled';
+  try { state.incidentPopupEnabled = localStorage.getItem(key) !== 'false'; }
+  catch { state.incidentPopupEnabled = true; }
+  const toggle = $('#incident-popup-enabled');
+  toggle.checked = state.incidentPopupEnabled;
+  toggle.addEventListener('change', () => {
+    state.incidentPopupEnabled = toggle.checked;
+    try { localStorage.setItem(key, String(state.incidentPopupEnabled)); } catch { /* Keep the setting for this page session. */ }
+    if (!state.incidentPopupEnabled) dismissIncidentArrivalPopup();
+  });
+  $('#incident-arrival-ack').addEventListener('click', dismissIncidentArrivalPopup);
+  $('#incident-arrival-view').addEventListener('click', () => {
+    const id = state.incidentArrivalId;
+    if (!id) return;
+    dismissIncidentArrivalPopup();
+    window.location.assign(`/incident/${encodeURIComponent(id)}`);
+  });
+}
+
+function showIncidentArrivalPopup(incident) {
+  if (!incident?.id || !state.incidentPopupEnabled) return;
+  if (state.incidentArrivalTimer) clearTimeout(state.incidentArrivalTimer);
+  state.incidentArrivalId = incident.id;
+  $('#incident-arrival-title').textContent = String(incident.title || 'New incident').slice(0, 180);
+  $('#incident-arrival-meta').textContent = `${incident.agency || 'Agency'} · ${incident.borough || 'New York City'} · ${timeAgo(incident.occurredAt)}`;
+  $('#incident-arrival-scrim').hidden = false;
+  $('#incident-arrival-popup').hidden = false;
+  renderIncidents();
+  state.incidentArrivalTimer = setTimeout(dismissIncidentArrivalPopup, 8_000);
+}
+
+function dismissIncidentArrivalPopup() {
+  if (state.incidentArrivalTimer) clearTimeout(state.incidentArrivalTimer);
+  state.incidentArrivalTimer = null;
+  state.incidentArrivalId = null;
+  $('#incident-arrival-popup').hidden = true;
+  $('#incident-arrival-scrim').hidden = true;
+  renderIncidents();
+}
+
 async function loadAuthSession() {
   const params = new URLSearchParams(location.search);
   const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
   const adminInviteToken = hashParams.get('adminInvite') || params.get('adminInvite');
   const verificationToken = hashParams.get('verify') || params.get('verify');
   const requestedAuthMode = params.get('auth');
-  if (adminInviteToken || verificationToken || requestedAuthMode) {
+  const requestedProfile = params.get('profile') === '1';
+  if (adminInviteToken || verificationToken || requestedAuthMode || requestedProfile) {
     params.delete('adminInvite');
     params.delete('verify');
     params.delete('auth');
+    params.delete('profile');
     hashParams.delete('adminInvite');
     hashParams.delete('verify');
     const query = params.toString();
@@ -968,6 +1098,7 @@ async function loadAuthSession() {
   if (adminInviteToken) openAdminInviteCompletion(adminInviteToken);
   else if (state.authMessageAfterLoad) openAuthModal('login', state.authMessageAfterLoad.message, state.authMessageAfterLoad.kind);
   else if (requestedAuthMode === 'login' || requestedAuthMode === 'register') openAuthModal(requestedAuthMode);
+  else if (requestedProfile && state.authSession?.account) void openProfileManager();
 }
 
 function renderAuthHeader() {
@@ -976,10 +1107,11 @@ function renderAuthHeader() {
   $('#auth-register').hidden = signedIn;
   $('#signed-in-actions').hidden = !signedIn;
   $('#account-name').textContent = state.authSession?.kind === 'admin'
-    ? 'Administrator'
-    : state.authSession?.account?.firstName || '';
+    ? state.authSession?.account?.username ? `@${state.authSession.account.username}` : 'Administrator'
+    : state.authSession?.account?.username ? `@${state.authSession.account.username}` : '';
   $('#admin-dashboard').hidden = state.authSession?.kind !== 'admin';
   $('#account-webhooks').hidden = state.authSession?.kind !== 'user';
+  $('#account-profile').hidden = !state.authSession?.account;
 }
 
 function wireAuthControls() {
@@ -987,6 +1119,8 @@ function wireAuthControls() {
   $('#auth-register').addEventListener('click', () => openAuthModal('register'));
   $('#auth-close').addEventListener('click', () => { $('#auth-modal').hidden = true; });
   $('#account-webhooks').addEventListener('click', openWebhookManager);
+  $('#account-profile').addEventListener('click', openProfileManager);
+  $('#account-profile-form').addEventListener('submit', saveAccountProfile);
   $('#account-webhook-form').addEventListener('submit', createAccountWebhook);
   $('#account-webhook-form').querySelectorAll('input[name="boroughs"]').forEach((input) => input.addEventListener('change', () => {
     const all = $('#account-webhook-form').querySelector('input[value="all"]');
@@ -1007,6 +1141,7 @@ function wireAuthControls() {
     initializeAudienceView();
     renderAuthHeader();
     $('#webhook-manager').hidden = true;
+    $('#profile-manager').hidden = true;
     renderIncidents();
     renderLiveCalls();
   });
@@ -1017,6 +1152,8 @@ function wireAuthControls() {
 
 function openAuthModal(mode = 'login', message = '', messageKind = '') {
   $('#auth-form').hidden = false;
+  $('#webhook-manager').hidden = true;
+  $('#profile-manager').hidden = true;
   $('#auth-modal').hidden = false;
   renderAuthMessage(message, messageKind);
   renderAuthForm(mode);
@@ -1036,8 +1173,9 @@ function renderAuthForm(mode) {
   if (mode === 'register') {
     const defaultAudience = state.pendingAudience === 'news' ? 'news' : 'buff';
     form.innerHTML = `
-      <label class="auth-field">FIRST NAME<input name="firstName" autocomplete="given-name" maxlength="80" required></label>
-      <label class="auth-field">LAST NAME<input name="lastName" autocomplete="family-name" maxlength="80" required></label>
+      <label class="auth-field full">PUBLIC USERNAME<input name="username" autocomplete="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" required><small>3–24 characters: letters, numbers, and underscores. This is your public-facing name; your first and last name stay private from public account data.</small></label>
+      <label class="auth-field">PRIVATE FIRST NAME<input name="firstName" autocomplete="given-name" maxlength="80" required></label>
+      <label class="auth-field">PRIVATE LAST NAME<input name="lastName" autocomplete="family-name" maxlength="80" required></label>
       <label class="auth-field full">EMAIL<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
       <label class="auth-field full">PHONE<input name="phone" type="tel" autocomplete="tel" maxlength="40" required></label>
       <label class="auth-field">REQUESTED VIEW<select name="accountType"><option value="buff" ${defaultAudience === 'buff' ? 'selected' : ''}>Buff</option><option value="news" ${defaultAudience === 'news' ? 'selected' : ''}>News Media</option></select></label>
@@ -1065,7 +1203,7 @@ async function submitAuthForm(event) {
   const values = Object.fromEntries(new FormData(form).entries());
   try {
     if (form.dataset.adminInviteToken) {
-      const result = await authRequest('/api/auth/admin-invite-complete', { token: form.dataset.adminInviteToken, password: values.password });
+      const result = await authRequest('/api/auth/admin-invite-complete', { token: form.dataset.adminInviteToken, password: values.password, username: values.username });
       state.authSession = result.session;
       renderAuthHeader();
       window.location.replace('/admin');
@@ -1097,14 +1235,54 @@ async function submitAuthForm(event) {
 
 function openAdminInviteCompletion(token) {
   $('#auth-form').hidden = false;
+  $('#webhook-manager').hidden = true;
+  $('#profile-manager').hidden = true;
   $('#auth-modal').hidden = false;
   $('#auth-title').textContent = 'Set administrator password';
-  renderAuthMessage('Choose a unique password of at least 16 characters. This invitation expires after 24 hours.');
+  renderAuthMessage('Choose your public username and a unique password of at least 16 characters. Your first and last name are not exposed in public-facing account data.');
   const form = $('#auth-form');
   form.dataset.adminInviteToken = token;
-  form.innerHTML = '<label class="auth-field full">NEW PASSWORD (16+ CHARACTERS)<input name="password" type="password" autocomplete="new-password" minlength="16" maxlength="128" required></label><button class="auth-form-submit" type="submit">Activate administrator account</button>';
+  form.innerHTML = '<label class="auth-field full">PUBLIC USERNAME<input name="username" autocomplete="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" required><small>3–24 characters: letters, numbers, and underscores.</small></label><label class="auth-field full">NEW PASSWORD (16+ CHARACTERS)<input name="password" type="password" autocomplete="new-password" minlength="16" maxlength="128" required></label><button class="auth-form-submit" type="submit">Activate staff account</button>';
   form.addEventListener('submit', submitAuthForm, { once: true });
   form.querySelector('input')?.focus();
+}
+
+async function openProfileManager() {
+  if (!state.authSession?.account) return;
+  $('#auth-modal').hidden = false;
+  $('#auth-title').textContent = 'Public profile';
+  $('#auth-form').hidden = true;
+  $('#webhook-manager').hidden = true;
+  $('#profile-manager').hidden = false;
+  renderAuthMessage('');
+  const input = $('#account-profile-form').elements.namedItem('username');
+  input.value = state.authSession.account.username || '';
+  try {
+    const response = await fetch('/api/account/profile', { credentials: 'same-origin', cache: 'no-store' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Could not load your public profile.');
+    input.value = data.username;
+  } catch (error) { renderAuthMessage(error.message, 'error'); }
+  input.focus();
+}
+
+async function saveAccountProfile(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/account/profile', {
+      method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: form.elements.namedItem('username').value })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Could not update your username.');
+    state.authSession.account.username = data.username;
+    renderAuthHeader();
+    renderAuthMessage(`Your public username is now @${data.username}.`, 'success');
+  } catch (error) { renderAuthMessage(error.message, 'error'); }
+  finally { button.disabled = false; }
 }
 
 async function authRequest(path, body) {

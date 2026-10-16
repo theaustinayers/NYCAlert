@@ -21,6 +21,7 @@ import { XApiIncidentPublisher } from './providers/x-post.js';
 import { SourceCallLedger } from './services/source-call-ledger.js';
 import { IncidentVoteStore } from './services/incident-vote-store.js';
 import { WebhookDeliveryProvider } from './providers/webhook-delivery.js';
+import { IncidentDatabase } from './storage/incident-database.js';
 
 const store = new SubscriptionStore(config.dataDir);
 const accountStore = new AccountStore(config.dataDir);
@@ -28,7 +29,8 @@ const webhookDelivery = new WebhookDeliveryProvider(accountStore, config.dashboa
 const siteSettingsStore = new SiteSettingsStore(config.dataDir);
 const learningLog = new LearningLog(config.dataDir, config.aiLearningLogEnabled, config.aiLearningLogRetentionDays, config.aiLearningLogMaxEvents);
 const sourceCallLedger = new SourceCallLedger(config.dataDir);
-const incidentVoteStore = new IncidentVoteStore(config.dataDir);
+const incidentVoteStore = new IncidentVoteStore(config.dataDir, 'nycalert.sqlite');
+const incidentDatabase = new IncidentDatabase(config.dataDir);
 const deploymentUpdater = new DeploymentUpdater(config.dataDir);
 const xPublisher = config.xUserAccessToken
   ? new XApiIncidentPublisher({ kind: 'oauth2-user', userAccessToken: config.xUserAccessToken })
@@ -41,7 +43,7 @@ const xPublisher = config.xUserAccessToken
       accessTokenSecret: config.xOAuthAccessTokenSecret
     })
     : undefined;
-const dashboardStore = new DashboardStore(config.dashboardPublicAudio, 300, config.dashboardPublicTranscripts);
+const dashboardStore = new DashboardStore(config.dashboardPublicAudio, 300, config.dashboardPublicTranscripts, 100, incidentDatabase);
 const dashboard = new DashboardServer(dashboardStore, config.dashboardPort, config.dashboardHost, config.applicationId, accountStore, {
   publicUrl: config.dashboardPublicUrl,
   trustProxy: config.trustProxy,
@@ -53,7 +55,7 @@ const dashboard = new DashboardServer(dashboardStore, config.dashboardPort, conf
   smtpUsername: config.smtpUsername,
   smtpPassword: config.smtpPassword,
   smtpFrom: config.smtpFrom
-}, siteSettingsStore, learningLog, deploymentUpdater, xPublisher, incidentVoteStore);
+}, siteSettingsStore, learningLog, deploymentUpdater, xPublisher, incidentVoteStore, config.dashboardReadApiOrigins);
 const incidentGeocoder = new NominatimIncidentGeocoder(config.mapGeocoderContact);
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 let feedPoller: CallFeedPoller | undefined;
@@ -63,6 +65,7 @@ await store.init();
 await learningLog.init();
 await sourceCallLedger.init();
 await incidentVoteStore.init();
+await dashboardStore.init();
 await dashboard.start();
 
 if (!config.xAutoPostEnabled) {
@@ -187,6 +190,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     void learningLog.flush();
     sourceCallLedger.close();
     incidentVoteStore.close();
+    dashboardStore.close();
     feedPoller?.stop();
     void staticStreamMonitor?.stop();
     void dashboard.stop();

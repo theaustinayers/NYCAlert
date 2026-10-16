@@ -69,6 +69,43 @@ async function availablePort(): Promise<number> {
 }
 
 describe('DashboardServer account routes', () => {
+  it('serves a versioned paginated incident API for alternate dashboard templates', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const store = new DashboardStore(false);
+    const fire = await store.publish({
+      title: 'Reported Fire', headline: 'Reported Fire', summary: 'Fire units responding.', occurredAt: new Date(),
+      agency: 'FDNY', borough: 'Queens', category: 'newsworthy', callType: 'fire', incidentType: 'fire', confidence: 0.9, newsworthinessScore: 4
+    });
+    await store.publish({
+      title: 'Medical Response', headline: 'Medical Response', summary: 'EMS units responding.', occurredAt: new Date(),
+      agency: 'FDNY', borough: 'Brooklyn', category: 'newsworthy', callType: 'ems', incidentType: 'medical', confidence: 0.9, newsworthinessScore: 4
+    });
+    const server = new DashboardServer(store, port, '127.0.0.1', undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, ['https://mdt.example.test']);
+    await server.start();
+    try {
+      const page = await fetch(`${origin}/api/v1/incidents?callType=fire&borough=Queens&limit=1&offset=0`);
+      assert.equal(page.status, 200);
+      const result = await page.json() as { data: Array<{ id: string; callType: string }>; page: { total: number; hasMore: boolean } };
+      assert.equal(result.data.length, 1);
+      assert.equal(result.data[0]?.id, fire.id);
+      assert.equal(result.data[0]?.callType, 'fire');
+      assert.deepEqual(result.page, { limit: 1, offset: 0, total: 1, hasMore: false });
+      const detail = await fetch(`${origin}/api/v1/incidents/${fire.id}`);
+      assert.equal((await detail.json() as { data: { id: string } }).data.id, fire.id);
+      const external = await fetch(`${origin}/api/v1/incidents?limit=1`, { headers: { Origin: 'https://mdt.example.test' } });
+      assert.equal(external.headers.get('access-control-allow-origin'), 'https://mdt.example.test');
+      assert.equal(external.headers.get('access-control-allow-credentials'), null);
+      const preflight = await fetch(`${origin}/api/v1/incidents`, { method: 'OPTIONS', headers: { Origin: 'https://mdt.example.test' } });
+      assert.equal(preflight.status, 204);
+      assert.equal(preflight.headers.get('access-control-allow-methods'), 'GET, OPTIONS');
+      const deniedPreflight = await fetch(`${origin}/api/v1/incidents`, { method: 'OPTIONS', headers: { Origin: 'https://unlisted.example.test' } });
+      assert.equal(deniedPreflight.status, 403);
+      const invalidType = await fetch(`${origin}/api/v1/incidents?callType=medical`);
+      assert.equal(invalidType.status, 400);
+    } finally { await server.stop(); }
+  });
+
   it('serves versioned admin scripts without cache so deployed HTML and JavaScript stay in sync', async () => {
     const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;
@@ -83,6 +120,10 @@ describe('DashboardServer account routes', () => {
       assert.match(homeHtml, /id="presence-total"/);
       assert.match(homeHtml, /id="presence-buff"/);
       assert.match(homeHtml, /id="presence-news"/);
+      assert.match(homeHtml, /id="incident-popup-enabled"/);
+      assert.match(homeHtml, /id="incident-arrival-ack"/);
+      assert.match(homeHtml, /id="incident-arrival-scrim"/);
+      assert.match(homeHtml, /data-call-type="ems"/);
       assert.doesNotMatch(homeHtml, /MONITORING · AI-SELECTED SUMMARIES ONLY/);
       assert.match(homeHtml, /href="https:\/\/buymeacoffee\.com\/nycalert"[^>]*aria-label="Donate to NYC Alert on Buy Me a Coffee"/);
       assert.match(homeHtml, /SUPPORT NYC ALERT<\/span><strong>Donate<\/strong><span class="stat-caption">BUY ME A COFFEE/);
@@ -92,18 +133,24 @@ describe('DashboardServer account routes', () => {
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
-      assert.match(html, /\/admin\.js\?v=admin-webhooks-20261015-1/);
+      assert.match(html, /\/admin\.js\?v=admin-call-types-private-usernames-20261015-2/);
       assert.match(html, /id="update-website"/);
       const wordmark = await fetch(`${origin}/nyc-alert-wordmark.svg`);
       assert.equal(wordmark.status, 200);
       assert.match(wordmark.headers.get('content-type') ?? '', /image\/svg\+xml/);
       assert.match(await wordmark.text(), /NYC Alert/);
-      const script = await fetch(`${origin}/admin.js?v=admin-webhooks-20261015-1`);
+      const script = await fetch(`${origin}/admin.js?v=admin-call-types-private-usernames-20261015-2`);
       assert.equal(script.status, 200);
       assert.equal(script.headers.get('cache-control'), 'no-store');
       const adminScript = await script.text();
       assert.match(adminScript, /async function loadOverview\(\)/);
       assert.match(adminScript, /Dashboard reconnecting during update/);
+      const popupStyles = await fetch(`${origin}/incident-popup.css`);
+      assert.equal(popupStyles.status, 200);
+      assert.match(await popupStyles.text(), /incident-arrival-popup/);
+      const callTypeStyles = await fetch(`${origin}/call-types.css`);
+      assert.equal(callTypeStyles.status, 200);
+      assert.match(await callTypeStyles.text(), /call-type-filter/);
       const webhookStyles = await fetch(`${origin}/webhooks.css`);
       assert.equal(webhookStyles.status, 200);
       assert.match(await webhookStyles.text(), /\.webhook-manager/);
@@ -191,6 +238,7 @@ describe('DashboardServer account routes', () => {
     const accounts = new AccountStore(join(testDirectory, 'saved-dashboard-preferences'));
     await accounts.init();
     const registered = await accounts.register({
+      username: 'preference_user',
       firstName: 'Preference', lastName: 'Tester', email: 'saved-preferences@example.test', phone: '2125550100',
       usageCase: 'Testing persistent dashboard selections.', accountType: 'news', password: 'Strong-test-password-123'
     });
@@ -235,12 +283,57 @@ describe('DashboardServer account routes', () => {
     } finally { await server.stop(); }
   });
 
+  it('keeps first and last names out of public sessions and allows same-origin username changes', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const accounts = new AccountStore(join(testDirectory, 'private-account-profile'));
+    await accounts.init();
+    const registered = await accounts.register({ username: 'public_initial', firstName: 'Private', lastName: 'Example', email: 'private-profile@example.test', phone: '2125550100', usageCase: 'Testing username profile privacy.', accountType: 'buff', password: 'Strong-test-password-123' });
+    const verified = await accounts.verifyEmail(registered.verificationToken);
+    await accounts.updateAccount(verified.id, { status: 'approved' });
+    const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
+      publicUrl: origin, trustProxy: true, smtpPort: 587, smtpSecure: false, smtpFrom: 'noreply@example.test'
+    });
+    await server.start();
+    try {
+      const unauthorized = await fetch(`${origin}/api/account/profile`);
+      assert.equal(unauthorized.status, 401);
+      const login = await fetch(`${origin}/api/auth/login`, {
+        method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: verified.email, password: 'Strong-test-password-123' })
+      });
+      assert.equal(login.status, 200);
+      const cookie = login.headers.get('set-cookie')?.split(';')[0];
+      assert.ok(cookie);
+      const session = await fetch(`${origin}/api/auth/session`, { headers: { Cookie: cookie } });
+      const sessionBody = await session.text();
+      assert.match(sessionBody, /public_initial/);
+      assert.doesNotMatch(sessionBody, /firstName|lastName|Private|Example/);
+      assert.deepEqual(await (await fetch(`${origin}/api/account/profile`, { headers: { Cookie: cookie } })).json(), { username: 'public_initial' });
+
+      const crossOrigin = await fetch(`${origin}/api/account/profile`, {
+        method: 'PUT', headers: { Cookie: cookie, Origin: 'https://attacker.example', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'new_handle' })
+      });
+      assert.equal(crossOrigin.status, 403);
+      const updated = await fetch(`${origin}/api/account/profile`, {
+        method: 'PUT', headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'New_Handle' })
+      });
+      assert.equal(updated.status, 200);
+      assert.deepEqual(await updated.json(), { username: 'New_Handle' });
+      assert.equal((await fetch(`${origin}/api/auth/session`, { headers: { Cookie: cookie } }).then((response) => response.text())).includes('Private'), false);
+      assert.equal(accounts.listAdminAccounts().find((account) => account.id === verified.id)?.firstName, 'Private');
+    } finally { await server.stop(); }
+  });
+
   it('allows approved accounts to manage secret Discord and Slack endpoints and lets admins suspend delivery', async () => {
     const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;
     const accounts = new AccountStore(join(testDirectory, 'account-webhook-routes'));
     await accounts.init();
     const registered = await accounts.register({
+      username: 'webhook_user',
       firstName: 'Webhook', lastName: 'Account', email: 'webhook-routes@example.test', phone: '2125550100',
       usageCase: 'Testing webhook management routes.', accountType: 'news', password: 'Strong-test-password-123'
     });
@@ -317,6 +410,7 @@ describe('DashboardServer account routes', () => {
     await accounts.init();
     for (const accountType of ['buff', 'news'] as const) {
       const registered = await accounts.register({
+        username: `presence_${accountType}`,
         firstName: 'Presence', lastName: accountType, email: `presence-${accountType}@example.test`, phone: '2125550100',
         usageCase: 'Testing real-time active audience counts.', accountType, password: 'Strong-test-password-123'
       });
@@ -433,7 +527,7 @@ describe('DashboardServer account routes', () => {
         method: 'POST',
         headers: { Origin: origin, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          firstName: 'Taylor', lastName: 'Example', email: 'taylor@example.test', phone: '2125550100',
+          username: 'taylor_public', firstName: 'Taylor', lastName: 'Example', email: 'taylor@example.test', phone: '2125550100',
           usageCase: 'Testing account verification email delivery.', accountType: 'buff', password: 'strong-password-123'
         })
       });
@@ -444,6 +538,7 @@ describe('DashboardServer account routes', () => {
       assert.match(smtp.messages[0]!, /text\/html/);
       assert.match(smtp.messages[0]!, /Confirm your email/);
       assert.match(smtp.messages[0]!, /expires in 24 hours/);
+      assert.match(smtp.messages[0]!, /Hello taylor_public/);
     } finally {
       await server.stop();
       await smtp.close();
@@ -651,8 +746,13 @@ describe('DashboardServer account routes', () => {
     await learningLog.init();
     const server = new DashboardServer(dashboardStore, port, '127.0.0.1', undefined, undefined, undefined, undefined, learningLog, undefined, undefined, voteStore);
     const deviceId = 'd03d9d92-17bb-4eb8-9f20-09a6b4a12d6f';
+    let eventReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     await server.start();
     try {
+      const eventResponse = await fetch(`${origin}/api/events`);
+      assert.equal(eventResponse.status, 200);
+      eventReader = eventResponse.body!.getReader();
+      await eventReader.read(); // Initial SSE retry directive.
       const denied = await fetch(`${origin}/api/incidents/${incident.id}/vote`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceId, vote: 'up' })
@@ -666,6 +766,13 @@ describe('DashboardServer account routes', () => {
       const accepted = await vote('up');
       assert.equal(accepted.status, 200);
       assert.deepEqual(await accepted.json(), { up: 1, down: 0, myVote: 'up', accepted: true, message: 'Vote recorded.' });
+      const eventChunk = await eventReader.read();
+      const eventText = new TextDecoder().decode(eventChunk.value);
+      assert.match(eventText, /event: community-upvote/);
+      assert.match(eventText, new RegExp(`\\"id\\":\\"${incident.id}\\"`));
+      assert.match(eventText, /Reported Fire/);
+      assert.doesNotMatch(eventText, new RegExp(deviceId));
+      assert.doesNotMatch(eventText, /transcript|deviceId/i);
       const duplicate = await vote('down');
       assert.equal(duplicate.status, 200);
       assert.deepEqual(await duplicate.json(), { up: 1, down: 0, myVote: 'up', accepted: false, message: 'This device has already voted on this incident.' });
@@ -685,6 +792,7 @@ describe('DashboardServer account routes', () => {
       assert.equal(feedback?.incidentId, incident.id);
       assert.equal(JSON.stringify(feedback).includes(deviceId), false);
     } finally {
+      await eventReader?.cancel();
       await server.stop();
       voteStore.close();
     }

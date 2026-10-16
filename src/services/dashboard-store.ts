@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { rm, stat } from 'node:fs/promises';
 import type { Agency, Borough } from '../domain/subscriptions.js';
+import { deriveCallType, type CallType } from '../domain/call-type.js';
 import { canShowMapMarker, type LocationPrecision } from '../domain/location.js';
 import { isGenericIncidentHeadline, normalizeIncidentHeadline, type AlertCategory, type IncidentType, type RadioUnitAssignment } from '../domain/triage.js';
 import type { BroadcastifyFeedStatus } from '../providers/broadcastify.js';
+import type { IncidentDatabase } from '../storage/incident-database.js';
 
 export interface DashboardIncidentInput {
   title: string;
@@ -13,6 +15,7 @@ export interface DashboardIncidentInput {
   agency: Agency;
   borough: Borough | 'Citywide';
   category: AlertCategory;
+  callType?: CallType;
   location?: string;
   incidentType?: IncidentType;
   latitude?: number;
@@ -41,6 +44,7 @@ export interface DashboardIncident {
   agencies: Agency[];
   borough: Borough | 'Citywide';
   category: AlertCategory;
+  callType?: CallType;
   location?: string;
   incidentType?: IncidentType;
   latitude?: number;
@@ -70,6 +74,7 @@ export interface DashboardIncidentUpdateInput {
   isExplicitLocationCorrection?: boolean;
   /** Superseded report when a corrected located call absorbs an earlier pending report. */
   previousLocation?: string;
+  callType?: CallType;
   incidentType?: IncidentType;
   latitude?: number;
   longitude?: number;
@@ -95,6 +100,7 @@ export interface DashboardLiveCallInput {
   transcript: string;
   headline?: string;
   category: AlertCategory | 'routine';
+  callType?: CallType;
   incidentType?: IncidentType;
   location?: string;
   summary: string;
@@ -118,6 +124,7 @@ export interface DashboardLiveCall {
   transcript?: string;
   headline?: string;
   category: AlertCategory | 'routine';
+  callType?: CallType;
   incidentType?: IncidentType;
   location?: string;
   summary: string;
@@ -161,8 +168,17 @@ export class DashboardStore {
     private readonly allowPublicAudio: boolean,
     private readonly maxIncidents = 300,
     private readonly allowPublicTranscripts = false,
-    private readonly maxLiveCalls = 100
+    private readonly maxLiveCalls = 100,
+    private readonly incidentDatabase?: IncidentDatabase
   ) {}
+
+  async init(): Promise<void> {
+    await this.incidentDatabase?.init();
+  }
+
+  close(): void {
+    this.incidentDatabase?.close();
+  }
 
   setFeedStatusProvider(provider: () => BroadcastifyFeedStatus[]): void {
     this.feedStatusProvider = provider;
@@ -255,6 +271,7 @@ export class DashboardStore {
       ...(this.allowPublicTranscripts ? { transcript: input.transcript.slice(0, 4_000) } : {}),
       ...(input.headline?.trim() ? { headline: input.headline.trim().slice(0, 180) } : {}),
       category: input.category,
+      ...(input.callType ?? deriveCallType(input.agency, input.incidentType) ? { callType: input.callType ?? deriveCallType(input.agency, input.incidentType) } : {}),
       ...(input.incidentType ? { incidentType: input.incidentType } : {}),
       summary: this.allowPublicTranscripts ? input.summary.slice(0, 700) : 'Transcript and call summary display is disabled.',
       confidence: Math.max(0, Math.min(1, input.confidence)),
@@ -291,7 +308,8 @@ export class DashboardStore {
   }
 
   async promoteLiveCallFromCommunity(callId: string, votes: { up: number; down: number }): Promise<DashboardIncident | undefined> {
-    const existing = this.incidents.find((incident) => incident.communitySourceCallId === callId);
+    const existing = this.incidentDatabase?.findCommunityPromotion(callId)
+      ?? this.incidents.find((incident) => incident.communitySourceCallId === callId);
     if (existing) return existing;
     const call = this.getLiveCall(callId);
     if (!call || call.category === 'routine') return undefined;
@@ -303,6 +321,7 @@ export class DashboardStore {
       agency: call.agency,
       borough: call.borough,
       category: call.category as AlertCategory,
+      ...(call.callType ? { callType: call.callType } : {}),
       ...(call.location ? { location: call.location } : {}),
       ...(call.incidentType ? { incidentType: call.incidentType } : {}),
       unitIds: call.unitAssignments.map((assignment) => assignment.unitId),
@@ -351,6 +370,7 @@ export class DashboardStore {
       updateCount: 0,
       updates: [],
       category: input.category,
+      ...(input.callType ?? deriveCallType(input.agency, input.incidentType) ? { callType: input.callType ?? deriveCallType(input.agency, input.incidentType) } : {}),
       confidence: Math.max(0, Math.min(1, input.confidence)),
       newsworthinessScore: Math.max(1, Math.min(5, Math.round(input.newsworthinessScore))),
       buffInterestScore: Math.max(1, Math.min(5, Math.round(input.buffInterestScore ?? input.newsworthinessScore))),
@@ -359,24 +379,28 @@ export class DashboardStore {
       ...(input.communitySelected ? { communitySelected: true } : {}),
       ...(input.communitySourceCallId ? { communitySourceCallId: input.communitySourceCallId } : {})
     };
-    this.incidents.unshift(incident);
-    while (this.incidents.length > this.maxIncidents) {
-      const removed = this.incidents.pop();
-      if (removed) {
-        const audio = this.audioFiles.get(removed.id);
-        this.audioFiles.delete(removed.id);
-        if (audio) await this.releaseAudio(audio.path);
+    if (this.incidentDatabase) this.incidentDatabase.upsert(incident);
+    else {
+      this.incidents.unshift(incident);
+      while (this.incidents.length > this.maxIncidents) {
+        const removed = this.incidents.pop();
+        if (removed) {
+          const audio = this.audioFiles.get(removed.id);
+          this.audioFiles.delete(removed.id);
+          if (audio) await this.releaseAudio(audio.path);
+        }
       }
     }
+    await this.trimAudioReferences();
     this.notifyIncidentChange();
     return incident;
   }
 
   async updateIncident(incidentId: string, input: DashboardIncidentUpdateInput): Promise<DashboardIncident | undefined> {
     const index = this.incidents.findIndex((incident) => incident.id === incidentId);
-    if (index < 0) return undefined;
-    const current = this.incidents[index]!;
-    let hasAudio = current.hasAudio;
+    const current = this.getIncident(incidentId);
+    if (!current) return undefined;
+    let hasAudio = Boolean(this.audioFiles.get(current.id)) || current.hasAudio;
     if (!hasAudio && this.allowPublicAudio && current.agency === 'FDNY' && input.audioPath) {
       try {
         hasAudio = (await stat(input.audioPath)).isFile();
@@ -416,6 +440,7 @@ export class DashboardStore {
       updatedAt: input.occurredAt.toISOString(),
       ...(acceptLocation ? { location: input.location!.slice(0, 180) } : {}),
       ...(input.incidentType && input.incidentType !== 'other' ? { incidentType: input.incidentType } : {}),
+      ...((input.callType ?? current.callType ?? deriveCallType(input.agency ?? current.agency, input.incidentType)) ? { callType: input.callType ?? current.callType ?? deriveCallType(input.agency ?? current.agency, input.incidentType) } : {}),
       ...(hasMapMarker ? { latitude: input.latitude, longitude: input.longitude } : locationChanged ? { latitude: undefined, longitude: undefined } : {}),
       locationPrecision: hasMapMarker ? input.locationPrecision! : locationChanged ? input.locationPrecision ?? 'unresolved' : current.locationPrecision,
       unitIds: [...new Set([...current.unitIds, ...input.unitIds])].slice(0, 12),
@@ -435,7 +460,7 @@ export class DashboardStore {
         unitIds: [...new Set(input.unitIds)].slice(0, 12),
         unitAssignments: normalizeUnitAssignments(input.unitAssignments ?? []),
         boxNumbers: normalizeBoxNumbers(input.boxNumbers ?? [])
-      }].slice(-12),
+      }],
       category: nextCategory,
       confidence: Math.max(current.confidence, Math.max(0, Math.min(1, input.confidence))),
       newsworthinessScore: Math.max(current.newsworthinessScore, Math.max(1, Math.min(5, Math.round(input.newsworthinessScore)))),
@@ -443,12 +468,14 @@ export class DashboardStore {
       assignmentDeskScore: Math.max(current.assignmentDeskScore, Math.max(1, Math.min(5, Math.round(input.assignmentDeskScore ?? input.newsworthinessScore)))),
       hasAudio
     };
-    this.incidents[index] = updated;
+    if (this.incidentDatabase) this.incidentDatabase.upsert(updated);
+    else if (index >= 0) this.incidents[index] = updated;
     this.notifyIncidentChange();
     return updated;
   }
 
   search(query = '', boroughs?: readonly Borough[]): DashboardIncident[] {
+    if (this.incidentDatabase) return this.incidentDatabase.list(query, boroughs).map((incident) => this.withAudioAvailability(incident));
     const normalized = query.trim().toLowerCase();
     if (!normalized) return this.incidents.filter((incident) => boroughMatches(incident.borough, boroughs));
     return this.incidents.filter((incident) => boroughMatches(incident.borough, boroughs) &&
@@ -457,13 +484,31 @@ export class DashboardStore {
   }
 
   getIncident(incidentId: string): DashboardIncident | undefined {
-    return this.incidents.find((incident) => incident.id === incidentId);
+    const incident = this.incidentDatabase?.get(incidentId) ?? this.incidents.find((item) => item.id === incidentId);
+    return incident ? this.withAudioAvailability(incident) : undefined;
   }
 
-  async adminEditIncident(incidentId: string, input: { headline: string; summary: string; location?: string }): Promise<DashboardIncident | undefined> {
+  listIncidentPage(query = '', boroughs?: readonly Borough[], callType?: CallType, limit = 50, offset = 0): { incidents: DashboardIncident[]; total: number; limit: number; offset: number } {
+    if (!this.incidentDatabase) {
+      const all = this.search(query, boroughs).filter((incident) => !callType || (incident.callType ?? deriveCallType(incident.agency, incident.incidentType)) === callType);
+      const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+      const safeOffset = Math.max(0, Math.floor(offset));
+      return { incidents: all.slice(safeOffset, safeOffset + safeLimit), total: all.length, limit: safeLimit, offset: safeOffset };
+    }
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const safeOffset = Math.max(0, Math.floor(offset));
+    return {
+      incidents: this.incidentDatabase.list(query, boroughs, safeLimit, safeOffset, callType).map((incident) => this.withAudioAvailability(incident)),
+      total: this.incidentDatabase.count(query, boroughs, callType),
+      limit: safeLimit,
+      offset: safeOffset
+    };
+  }
+
+  async adminEditIncident(incidentId: string, input: { headline: string; summary: string; location?: string; callType?: CallType; incidentType?: IncidentType }): Promise<DashboardIncident | undefined> {
     const index = this.incidents.findIndex((incident) => incident.id === incidentId);
-    if (index < 0) return undefined;
-    const current = this.incidents[index]!;
+    const current = this.getIncident(incidentId);
+    if (!current) return undefined;
     const headline = normalizeIncidentHeadline(input.headline, current.category);
     const summary = input.summary.trim().slice(0, 700);
     const location = input.location?.trim().slice(0, 180) || undefined;
@@ -475,17 +520,21 @@ export class DashboardStore {
       summary,
       updatedAt: new Date().toISOString(),
       ...(location ? { location } : { location: undefined }),
+      ...(input.callType ? { callType: input.callType } : {}),
+      ...(input.incidentType ? { incidentType: input.incidentType } : {}),
       ...(locationChanged ? { latitude: undefined, longitude: undefined, locationPrecision: 'unresolved' } : {})
     };
-    this.incidents[index] = updated;
+    if (this.incidentDatabase) this.incidentDatabase.upsert(updated);
+    else if (index >= 0) this.incidents[index] = updated;
     this.notifyIncidentChange();
     return updated;
   }
 
   async deleteIncident(incidentId: string): Promise<boolean> {
     const index = this.incidents.findIndex((incident) => incident.id === incidentId);
-    if (index < 0) return false;
-    this.incidents.splice(index, 1);
+    const deleted = this.incidentDatabase ? this.incidentDatabase.delete(incidentId) : index >= 0;
+    if (!deleted) return false;
+    if (!this.incidentDatabase && index >= 0) this.incidents.splice(index, 1);
     const audio = this.audioFiles.get(incidentId);
     this.audioFiles.delete(incidentId);
     if (audio) await this.releaseAudio(audio.path);
@@ -494,6 +543,7 @@ export class DashboardStore {
   }
 
   listMapIncidents(now = Date.now(), windowMs = 30 * 60 * 1000, boroughs?: readonly Borough[]): DashboardIncident[] {
+    if (this.incidentDatabase) return this.incidentDatabase.listMap(now, windowMs, boroughs).map((incident) => this.withAudioAvailability(incident));
     return this.incidents.filter((incident) => {
       const lastActivityAt = Date.parse(incident.updatedAt || incident.occurredAt);
       return boroughMatches(incident.borough, boroughs)
@@ -508,6 +558,20 @@ export class DashboardStore {
   private async releaseAudio(path: string): Promise<void> {
     if (![...this.audioFiles.values(), ...this.liveCallAudioFiles.values()].some((audio) => audio.path === path)) {
       await rm(path, { force: true });
+    }
+  }
+
+  private withAudioAvailability(incident: DashboardIncident): DashboardIncident {
+    return { ...incident, hasAudio: Boolean(this.audioFiles.get(incident.id)) };
+  }
+
+  private async trimAudioReferences(): Promise<void> {
+    while (this.audioFiles.size > this.maxIncidents) {
+      const oldestId = this.audioFiles.keys().next().value as string | undefined;
+      if (!oldestId) return;
+      const audio = this.audioFiles.get(oldestId);
+      this.audioFiles.delete(oldestId);
+      if (audio) await this.releaseAudio(audio.path);
     }
   }
 

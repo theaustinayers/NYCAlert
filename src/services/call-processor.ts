@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { subscriptionAudience, type AlertSubscription } from '../domain/subscriptions.js';
 import { analyzeFdnyTransmission } from '../domain/fdny-radio.js';
 import { canShowMapMarker, type LocationPrecision } from '../domain/location.js';
+import { deriveCallType } from '../domain/call-type.js';
 import { curateIncidentHeadline, shouldNotify, type CallTriage, type RadioCall } from '../domain/triage.js';
 import type { IncidentPostPublisher } from '../providers/x-post.js';
 import type { CallAnalysisProvider } from '../providers/ai.js';
@@ -356,6 +357,7 @@ export class CallProcessor {
         transcript,
         headline: triage.headline,
         category: triage.category,
+        callType: deriveCallType(call.agency, triage.incidentType),
         incidentType: triage.incidentType,
         location: triage.location,
         summary: triage.summary,
@@ -536,6 +538,7 @@ export class CallProcessor {
       agency: call.agency,
       borough: incidentBorough,
       category: triage.category,
+      callType: deriveCallType(call.agency, triage.incidentType),
       location: triage.location,
       incidentType: triage.incidentType,
       locationPrecision: boroughOnlyLocation ? 'borough' : coordinates?.precision ?? trace.geocode?.precision ?? 'unresolved',

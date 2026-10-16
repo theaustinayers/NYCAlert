@@ -119,12 +119,16 @@ function render(incident) {
   const unitAssignments = Array.isArray(incident.unitAssignments) ? incident.unitAssignments : [];
   const boxes = Array.isArray(incident.boxNumbers) ? incident.boxNumbers : [];
   const news = Number(incident.newsworthinessScore) || 1;
+  const callType = ['fire', 'ems', 'pd'].includes(incident.callType) ? incident.callType
+    : incident.incidentType === 'fire' ? 'fire' : incident.incidentType === 'medical' ? 'ems'
+      : incident.incidentType === 'police' ? 'pd' : incident.incidentType === 'vehicle' ? (incident.agency === 'FDNY' ? 'fire' : 'pd') : '';
+  const callTypeName = callType === 'fire' ? 'FIRE' : callType === 'ems' ? 'EMS' : callType === 'pd' ? 'PD' : '';
   const headline = String(incident.title || 'Incident').split(' | ')[0];
   const canonicalUrl = `${location.origin}/incident/${encodeURIComponent(incident.id)}`;
   root.innerHTML = `
     <article class="incident-detail-card">
       <header class="incident-detail-heading">
-        <div class="incident-detail-meta"><span class="incident-severity ${news === 5 ? 'breaking' : news >= 4 ? 'developing' : ''}">${news === 5 ? 'BREAKING NEWS' : news >= 4 ? 'DEVELOPING' : 'INCIDENT'}</span><span>${escapeHtml(incident.agency)} · ${escapeHtml(incident.borough)}</span><time>${escapeHtml(formatTime(incident.updatedAt || incident.occurredAt))}</time></div>
+        <div class="incident-detail-meta"><span class="incident-severity ${news === 5 ? 'breaking' : news >= 4 ? 'developing' : ''}">${news === 5 ? 'BREAKING NEWS' : news >= 4 ? 'DEVELOPING' : 'INCIDENT'}</span>${callTypeName ? `<span class="call-type-badge call-type-${callType}">${callTypeName}</span>` : ''}<span>${escapeHtml(incident.agency)} · ${escapeHtml(incident.borough)}</span><time>${escapeHtml(formatTime(incident.updatedAt || incident.occurredAt))}</time></div>
         <h1 class="incident-headline">${escapeHtml(headline)}</h1>
         <p class="incident-detail-deck">${escapeHtml(incident.summary)}</p>
       </header>

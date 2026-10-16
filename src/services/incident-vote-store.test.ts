@@ -34,4 +34,21 @@ describe('IncidentVoteStore', () => {
     assert.deepEqual(reopened.getSummary(incident.id, 'device-a'), { up: 1, down: 1, myVote: 'up' });
     reopened.close();
   });
+
+  it('imports legacy vote rows into the unified incident database without duplicating them on restart', async () => {
+    const legacy = new IncidentVoteStore(join(testDirectory, 'legacy-votes'));
+    await legacy.init();
+    legacy.castVote(incident, 'device-migrate', 'up');
+    legacy.close();
+
+    const unified = new IncidentVoteStore(join(testDirectory, 'legacy-votes'), 'nycalert.sqlite');
+    await unified.init();
+    assert.deepEqual(unified.getSummary(incident.id, 'device-migrate'), { up: 1, down: 0, myVote: 'up' });
+    unified.close();
+
+    const reopened = new IncidentVoteStore(join(testDirectory, 'legacy-votes'), 'nycalert.sqlite');
+    await reopened.init();
+    assert.deepEqual(reopened.getSummary(incident.id), { up: 1, down: 0, myVote: null });
+    reopened.close();
+  });
 });

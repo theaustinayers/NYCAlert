@@ -21,10 +21,12 @@ export interface DashboardPreferences {
 }
 export type AdminRole = 'owner' | 'admin' | 'moderator' | 'reviewer';
 export type AccountStatus = 'pending-verification' | 'pending-approval' | 'approved' | 'suspended';
+export type AccountRoleName = Exclude<AdminRole, 'owner'>;
 export interface AccountWebhook { id: string; name: string; url: string; platform?: WebhookPlatform; boroughs: Borough[] | 'all'; suspendedAt?: string; }
 export interface AccountWebhookSummary { id: string; name: string; platform?: WebhookPlatform; boroughs: Borough[] | 'all'; suspendedAt?: string; }
 export interface AccountRecord {
   id: string;
+  username: string;
   firstName: string;
   lastName: string;
   email: string;
@@ -44,8 +46,8 @@ export interface AccountRecord {
   webhooks: AccountWebhook[];
   dashboardPreferences?: DashboardPreferences;
 }
-export interface PublicAccount { id: string; firstName: string; lastName: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: Exclude<AdminRole, 'owner'>; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhookSummary[]; webhookAccessSuspended: boolean; dashboardPreferences?: DashboardPreferences; }
-export interface AdminAccount extends PublicAccount { phone: string; usageCase: string; }
+export interface PublicAccount { id: string; username: string; email: string; accountType: AccountRecord['accountType']; isAdmin: boolean; adminRole?: AccountRoleName; status: AccountStatus; emailVerified: boolean; createdAt: string; webhooks: AccountWebhookSummary[]; webhookAccessSuspended: boolean; dashboardPreferences?: DashboardPreferences; }
+export interface AdminAccount extends PublicAccount { firstName: string; lastName: string; phone: string; usageCase: string; }
 
 const passwordBytes = 64;
 const sessionLifetimeMs = 12 * 60 * 60 * 1000;
@@ -71,19 +73,28 @@ export class AccountStore {
       const parsed: unknown = JSON.parse(await readFile(this.filePath, 'utf8'));
       if (!Array.isArray(parsed)) throw new Error('Account store must contain a JSON array');
       this.accounts = parsed as AccountRecord[];
+      const claimed = new Set<string>();
+      for (const account of this.accounts) {
+        const normalized = normalizeUsername(account.username);
+        if (!normalized || claimed.has(normalized.toLowerCase())) account.username = uniqueGeneratedUsername(account.id, claimed);
+        else account.username = normalized;
+        claimed.add(account.username.toLowerCase());
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     this.initialized = true;
   }
 
-  async register(input: { firstName: string; lastName: string; email: string; phone: string; usageCase: string; accountType: AudienceAccountType; password: string }): Promise<{ account: PublicAccount; verificationToken: string }> {
+  async register(input: { username: string; firstName: string; lastName: string; email: string; phone: string; usageCase: string; accountType: AudienceAccountType; password: string }): Promise<{ account: PublicAccount; verificationToken: string }> {
     const email = input.email.trim().toLowerCase();
     if (this.accounts.some((account) => account.email === email)) throw new Error('An account already exists for this email. Try logging in or contact support.');
+    const username = this.requireAvailableUsername(input.username);
     const salt = randomBytes(16).toString('hex');
     const token = randomBytes(32).toString('base64url');
     const account: AccountRecord = {
       id: randomBytes(16).toString('hex'),
+      username,
       firstName: input.firstName.trim().slice(0, 80), lastName: input.lastName.trim().slice(0, 80), email,
       phone: input.phone.trim().slice(0, 40), usageCase: input.usageCase.trim().slice(0, 1000),
       accountType: input.accountType, status: 'pending-verification', createdAt: new Date().toISOString(),
@@ -165,11 +176,13 @@ export class AccountStore {
   listAccounts(): PublicAccount[] { return this.accounts.map((account) => this.publicView(account)); }
   listAdminAccounts(): AdminAccount[] {
     return this.accounts.filter((account) => !account.isAdmin).map((account) => ({
-      ...this.publicView(account), phone: account.phone, usageCase: account.usageCase
+      ...this.publicView(account), firstName: account.firstName, lastName: account.lastName, phone: account.phone, usageCase: account.usageCase
     }));
   }
-  listAdministrators(): PublicAccount[] {
-    return this.accounts.filter((account) => account.isAdmin).map((account) => this.publicView(account));
+  listAdministrators(): AdminAccount[] {
+    return this.accounts.filter((account) => account.isAdmin).map((account) => ({
+      ...this.publicView(account), firstName: account.firstName, lastName: account.lastName, phone: account.phone, usageCase: account.usageCase
+    }));
   }
 
   isAdministrator(id: string): boolean {
@@ -190,29 +203,31 @@ export class AccountStore {
     return true;
   }
 
-  async inviteAdministrator(input: { firstName: string; lastName: string; email: string; role?: Exclude<AdminRole, 'owner'> }): Promise<{ account: PublicAccount; invitationToken: string }> {
+  async inviteAdministrator(input: { firstName: string; lastName: string; email: string; role?: AccountRoleName }): Promise<{ account: PublicAccount; invitationToken: string }> {
     const email = input.email.trim().toLowerCase();
     if (!email.includes('@') || !input.firstName.trim() || !input.lastName.trim()) throw new Error('Enter the administrator name and a valid email address.');
     if (this.accounts.some((account) => account.email === email)) throw new Error('An account already exists for this email.');
     const passwordSalt = randomBytes(16).toString('hex');
     const token = randomBytes(32).toString('base64url');
     const account: AccountRecord = {
-      id: randomBytes(16).toString('hex'), firstName: input.firstName.trim().slice(0, 80), lastName: input.lastName.trim().slice(0, 80),
+      id: randomBytes(16).toString('hex'), username: '', firstName: input.firstName.trim().slice(0, 80), lastName: input.lastName.trim().slice(0, 80),
       email, phone: '', usageCase: `${input.role ?? 'admin'} invitation`, accountType: 'reviewer', isAdmin: true, adminRole: input.role ?? 'admin',
       status: 'pending-verification', createdAt: new Date().toISOString(), passwordSalt,
       passwordHash: hashPassword(randomBytes(32).toString('hex'), passwordSalt),
       verificationTokenHash: hashToken(token), verificationExpiresAt: Date.now() + verifyLifetimeMs, webhooks: []
     };
+    account.username = uniqueGeneratedUsername(account.id, new Set(this.accounts.map((item) => item.username?.toLowerCase()).filter((item): item is string => Boolean(item))));
     this.accounts.push(account);
     await this.persist();
     return { account: this.publicView(account), invitationToken: token };
   }
 
-  async completeAdminInvitation(token: string, password: string): Promise<{ token: string; account: PublicAccount }> {
+  async completeAdminInvitation(token: string, password: string, requestedUsername: string): Promise<{ token: string; account: PublicAccount }> {
     if (password.length < 16 || password.length > 128) throw new Error('Administrator password must be between 16 and 128 characters.');
     const tokenHash = hashToken(token);
     const account = this.accounts.find((item) => item.isAdmin && item.verificationTokenHash === tokenHash && (item.verificationExpiresAt ?? 0) > Date.now());
     if (!account) throw new Error('Administrator invitation is invalid or expired.');
+    account.username = this.requireAvailableUsername(requestedUsername, account.id);
     account.passwordSalt = randomBytes(16).toString('hex');
     account.passwordHash = hashPassword(password, account.passwordSalt);
     account.emailVerifiedAt = new Date().toISOString();
@@ -222,6 +237,14 @@ export class AccountStore {
     await this.persist();
     const session = this.createSession(account);
     return session;
+  }
+
+  async updateUsername(accountId: string, requestedUsername: string): Promise<string> {
+    const account = this.accounts.find((item) => item.id === accountId);
+    if (!account) throw new Error('Account not found.');
+    account.username = this.requireAvailableUsername(requestedUsername, accountId);
+    await this.persist();
+    return account.username;
   }
 
   async updateAccount(id: string, patch: { status?: AccountStatus; accountType?: AccountRecord['accountType'] }): Promise<PublicAccount | undefined> {
@@ -316,12 +339,21 @@ export class AccountStore {
   }
 
   private publicView(account: AccountRecord): PublicAccount {
-    const { id, firstName, lastName, email, accountType, isAdmin, adminRole, status, emailVerifiedAt, createdAt, webhooks } = account;
+    const { id, username, email, accountType, isAdmin, adminRole, status, emailVerifiedAt, createdAt, webhooks } = account;
     const webhookSummaries: AccountWebhookSummary[] = webhooks.map((webhook) => {
       const platform = webhook.platform ?? inferWebhookPlatform(webhook.url);
       return { id: webhook.id, name: webhook.name, ...(platform ? { platform } : {}), boroughs: webhook.boroughs, ...(webhook.suspendedAt ? { suspendedAt: webhook.suspendedAt } : {}) };
     });
-    return { id, firstName, lastName, email, accountType, isAdmin: Boolean(isAdmin), ...(isAdmin ? { adminRole: adminRole ?? 'admin' } : {}), status, emailVerified: Boolean(emailVerifiedAt), createdAt, webhookAccessSuspended: Boolean(account.webhookAccessSuspended), webhooks: webhookSummaries, ...(account.dashboardPreferences ? { dashboardPreferences: { ...account.dashboardPreferences, boroughs: [...account.dashboardPreferences.boroughs], liveCategories: [...account.dashboardPreferences.liveCategories] } } : {}) };
+    return { id, username, email, accountType, isAdmin: Boolean(isAdmin), ...(isAdmin ? { adminRole: adminRole ?? 'admin' } : {}), status, emailVerified: Boolean(emailVerifiedAt), createdAt, webhookAccessSuspended: Boolean(account.webhookAccessSuspended), webhooks: webhookSummaries, ...(account.dashboardPreferences ? { dashboardPreferences: { ...account.dashboardPreferences, boroughs: [...account.dashboardPreferences.boroughs], liveCategories: [...account.dashboardPreferences.liveCategories] } } : {}) };
+  }
+
+  private requireAvailableUsername(value: string, exceptAccountId?: string): string {
+    const username = normalizeUsername(value);
+    if (!username) throw new Error('Username must be 3–24 characters using letters, numbers, or underscores.');
+    if (this.accounts.some((account) => account.id !== exceptAccountId && account.username?.toLowerCase() === username.toLowerCase())) {
+      throw new Error('That username is already taken. Choose another.');
+    }
+    return username;
   }
 
   private async persist(): Promise<void> {
@@ -334,6 +366,23 @@ export class AccountStore {
     this.persistQueue = next;
     await next;
   }
+}
+
+export function normalizeUsername(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const username = value.trim();
+  return /^[A-Za-z0-9_]{3,24}$/.test(username) ? username : undefined;
+}
+
+function uniqueGeneratedUsername(accountId: string, claimed: Set<string>): string {
+  const stem = `member_${accountId.replace(/[^a-f0-9]/gi, '').slice(0, 8).toLowerCase() || randomBytes(4).toString('hex')}`;
+  let candidate = stem.slice(0, 24);
+  let suffix = 2;
+  while (claimed.has(candidate.toLowerCase())) {
+    const ending = `_${suffix++}`;
+    candidate = `${stem.slice(0, 24 - ending.length)}${ending}`;
+  }
+  return candidate;
 }
 
 const validBoroughs: Borough[] = ['Manhattan', 'Bronx', 'Queens', 'Brooklyn', 'Staten Island'];

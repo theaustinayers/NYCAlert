@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
-import { chmod, mkdir } from 'node:fs/promises';
+import { chmod, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { DashboardIncident, DashboardLiveCall } from './dashboard-store.js';
 
@@ -19,15 +19,18 @@ export interface CastIncidentVoteResult extends IncidentVoteSummary {
 /** Durable feedback store. Raw browser device IDs are hashed and never persisted. */
 export class IncidentVoteStore {
   private database?: Database.Database;
+  private readonly databasePath: string;
 
-  constructor(private readonly dataDirectory: string) {}
+  constructor(private readonly dataDirectory: string, databaseFileName = 'incident-votes.sqlite') {
+    this.databasePath = join(dataDirectory, databaseFileName);
+  }
 
   async init(): Promise<void> {
     if (this.database) return;
     await mkdir(this.dataDirectory, { recursive: true, mode: 0o700 });
     await chmod(this.dataDirectory, 0o700);
-    const database = new Database(join(this.dataDirectory, 'incident-votes.sqlite'));
-    database.pragma('journal_mode = DELETE');
+    const database = new Database(this.databasePath);
+    database.pragma('journal_mode = WAL');
     database.pragma('synchronous = FULL');
     database.exec(`
       CREATE TABLE IF NOT EXISTS incident_votes (
@@ -46,8 +49,32 @@ export class IncidentVoteStore {
       ) WITHOUT ROWID;
       CREATE INDEX IF NOT EXISTS incident_votes_incident_id ON incident_votes(incident_id);
     `);
-    await chmod(join(this.dataDirectory, 'incident-votes.sqlite'), 0o600);
+    await chmod(this.databasePath, 0o600);
+    if (this.databasePath !== join(this.dataDirectory, 'incident-votes.sqlite')) {
+      await this.importLegacyVotes(database);
+    }
     this.database = database;
+  }
+
+  private async importLegacyVotes(database: Database.Database): Promise<void> {
+    const legacyPath = join(this.dataDirectory, 'incident-votes.sqlite');
+    try { await stat(legacyPath); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    database.prepare('ATTACH DATABASE ? AS legacy_votes').run(legacyPath);
+    try {
+      const hasVoteTable = database.prepare("SELECT 1 FROM legacy_votes.sqlite_master WHERE type='table' AND name='incident_votes'").get();
+      if (!hasVoteTable) return;
+      database.transaction(() => {
+        database.exec(`INSERT OR IGNORE INTO main.incident_votes (
+          incident_id, device_hash, vote, voted_at, agency, borough, incident_type, category, public_score, buff_score, news_score
+        ) SELECT incident_id, device_hash, vote, voted_at, agency, borough, incident_type, category, public_score, buff_score, news_score
+          FROM legacy_votes.incident_votes`);
+      })();
+    } finally {
+      database.exec('DETACH DATABASE legacy_votes');
+    }
   }
 
   getSummary(incidentId: string, deviceId?: string): IncidentVoteSummary {

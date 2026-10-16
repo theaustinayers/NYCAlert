@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { DashboardStore } from './dashboard-store.js';
+import { IncidentDatabase } from '../storage/incident-database.js';
 
 const testDirectory = await mkdtemp(join(tmpdir(), 'nyc-dashboard-'));
 after(async () => rm(testDirectory, { recursive: true, force: true }));
@@ -20,6 +21,48 @@ const input = {
 };
 
 describe('DashboardStore', () => {
+  it('persists published incidents and update history for another site view across restarts', async () => {
+    const directory = join(testDirectory, 'durable-incidents');
+    const database = new IncidentDatabase(directory);
+    const store = new DashboardStore(false, 300, false, 100, database);
+    await store.init();
+    const incident = await store.publish({
+      ...input, headline: 'Working Fire', summary: 'Working fire with units operating.', borough: 'Queens',
+      callType: 'fire', incidentType: 'fire', location: '100 Example Street', latitude: 40.72, longitude: -73.81,
+      locationPrecision: 'street_address', unitIds: ['ENGINE 7'], boxNumbers: ['BOX 1234']
+    });
+    const updated = await store.updateIncident(incident.id, {
+      agency: 'NYPD', headline: 'Police assisting', summary: 'Police unit assisting at the working fire.',
+      occurredAt: new Date(Date.now() + 60_000), unitIds: ['NYPD CAR 1234'], confidence: 0.96,
+      newsworthinessScore: 4, buffInterestScore: 5, assignmentDeskScore: 4, category: 'newsworthy'
+    });
+    assert.equal(updated?.updateCount, 1);
+    for (let seq = 0; seq < 12; seq += 1) {
+      await store.updateIncident(incident.id, {
+        summary: `Additional incident update ${seq + 1}.`, occurredAt: new Date(Date.now() + (seq + 2) * 1_000),
+        unitIds: [], confidence: 0.96, newsworthinessScore: 4, buffInterestScore: 5, assignmentDeskScore: 4, category: 'newsworthy'
+      });
+    }
+    store.close();
+
+    const reopened = new DashboardStore(false, 300, false, 100, new IncidentDatabase(directory));
+    await reopened.init();
+    const restored = reopened.getIncident(incident.id)!;
+    assert.equal(restored.callType, 'fire');
+    assert.equal(restored.location, '100 Example Street');
+    assert.equal(restored.updateCount, 13);
+    assert.equal(restored.updates.length, 13);
+    assert.match(restored.updates[0]?.summary ?? '', /Police unit assisting/);
+    assert.deepEqual(restored.updates[0]?.unitIds, ['NYPD CAR 1234']);
+    assert.equal(reopened.search('assisting', ['Queens']).length, 1);
+    assert.equal(reopened.listIncidentPage('', ['Queens'], 'fire', 10, 0).total, 1);
+    assert.equal(reopened.listIncidentPage('', ['Brooklyn'], 'fire', 10, 0).total, 0);
+    assert.equal(reopened.listMapIncidents(Date.now() + 30_000).length, 1);
+    assert.equal(await reopened.deleteIncident(incident.id), true);
+    assert.equal(reopened.search().length, 0);
+    reopened.close();
+  });
+
   it('retains old and corrected addresses and never replaces a precise corrected pin with a borough-only update', async () => {
     const store = new DashboardStore(false);
     const incident = await store.publish({ ...input, headline: 'All Hands Working Fire', location: '100 Example Street',

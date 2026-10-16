@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { join } from 'node:path';
 import { createTransport } from 'nodemailer';
 import { isAgency, isBorough, type Agency, type Borough } from '../domain/subscriptions.js';
+import { isCallType } from '../domain/call-type.js';
 import { dashboardFeedLinks } from '../providers/broadcastify-catalog.js';
 import type { DashboardStore } from '../services/dashboard-store.js';
 import type { AccountStore, AccountStatus, AccountWebhook, AudienceAccountType } from '../storage/account-store.js';
@@ -43,6 +44,8 @@ const staticFiles = new Map<string, [string, string]>([
   ['/live-overflow.css', ['live-overflow.css', 'text/css; charset=utf-8']],
   ['/map.css', ['map.css', 'text/css; charset=utf-8']],
   ['/activity.css', ['activity.css', 'text/css; charset=utf-8']],
+  ['/incident-popup.css', ['incident-popup.css', 'text/css; charset=utf-8']],
+  ['/call-types.css', ['call-types.css', 'text/css; charset=utf-8']],
   ['/mobile.css', ['mobile.css', 'text/css; charset=utf-8']],
   ['/incident.css', ['incident.css', 'text/css; charset=utf-8']],
   ['/incident.js', ['incident.js', 'text/javascript; charset=utf-8']],
@@ -115,7 +118,8 @@ export class DashboardServer {
     private readonly learningLog?: LearningLog,
     private readonly deploymentUpdater?: DeploymentUpdater,
     private readonly xIntegrationTester?: XIntegrationTester,
-    private readonly incidentVotes?: IncidentVoteStore
+    private readonly incidentVotes?: IncidentVoteStore,
+    private readonly readApiAllowedOrigins: readonly string[] = []
   ) {}
 
   setPendingIncidentAdminHandlers(
@@ -147,6 +151,33 @@ export class DashboardServer {
       setSecurityHeaders(response, cspNonce);
       try {
         const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+        const isVersionedIncidentApi = url.pathname === '/api/v1/incidents'
+          || /^\/api\/v1\/(?:incidents|map-incidents)\//.test(url.pathname)
+          || url.pathname === '/api/v1/map-incidents';
+        if (isVersionedIncidentApi && request.method === 'OPTIONS') {
+          const origin = request.headers.origin;
+          if (!origin || !this.readApiAllowedOrigins.includes(origin)) {
+            json(response, 403, { error: 'Origin is not permitted to access the read-only incident API.' });
+            return;
+          }
+          response.writeHead(204, {
+            'Access-Control-Allow-Origin': origin,
+            'Access-Control-Allow-Methods': 'GET, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Max-Age': '600',
+            Vary: 'Origin'
+          });
+          response.end();
+          return;
+        }
+        if (isVersionedIncidentApi) {
+          const origin = request.headers.origin;
+          if (origin && this.readApiAllowedOrigins.includes(origin)) {
+            response.setHeader('Access-Control-Allow-Origin', origin);
+            response.setHeader('Access-Control-Expose-Headers', 'Content-Type');
+            response.setHeader('Vary', 'Origin');
+          }
+        }
         if (await this.handleAccountRoutes(request, response, url)) return;
         if (url.pathname === '/api/presence') {
           if (request.method !== 'POST') {
@@ -199,6 +230,47 @@ export class DashboardServer {
         }
         if (url.pathname === '/api/public-config') {
           json(response, 200, { discordApplicationId: this.discordApplicationId ?? null, analytics: this.siteSettings?.get() ?? {} });
+          return;
+        }
+        if (url.pathname === '/api/v1/incidents') {
+          const requestedCallType = url.searchParams.get('callType');
+          if (requestedCallType && !isCallType(requestedCallType)) {
+            json(response, 400, { error: 'callType must be fire, ems, or pd.' });
+            return;
+          }
+          const requestedLimit = Number(url.searchParams.get('limit') ?? 50);
+          const requestedOffset = Number(url.searchParams.get('offset') ?? 0);
+          const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(100, Math.floor(requestedLimit))) : 50;
+          const offset = Number.isFinite(requestedOffset) ? Math.max(0, Math.floor(requestedOffset)) : 0;
+          const page = this.store.listIncidentPage(
+            url.searchParams.get('q') ?? '', selectedBoroughs(url.searchParams),
+            isCallType(requestedCallType) ? requestedCallType : undefined, limit, offset
+          );
+          const deviceId = validVoteDeviceId(url.searchParams.get('deviceId'));
+          json(response, 200, {
+            data: page.incidents.map((incident) => ({
+              ...incident,
+              votes: this.incidentVotes?.getSummary(incident.id, deviceId) ?? { up: 0, down: 0, myVote: null }
+            })),
+            page: { limit: page.limit, offset: page.offset, total: page.total, hasMore: page.offset + page.incidents.length < page.total }
+          });
+          return;
+        }
+        const versionedIncidentMatch = /^\/api\/v1\/incidents\/([0-9a-f-]{36})$/i.exec(url.pathname);
+        if (versionedIncidentMatch) {
+          const incident = this.store.getIncident(versionedIncidentMatch[1]!);
+          if (!incident) { json(response, 404, { error: 'Incident not found.' }); return; }
+          json(response, 200, {
+            data: {
+              ...incident,
+              votes: this.incidentVotes?.getSummary(incident.id, validVoteDeviceId(url.searchParams.get('deviceId')))
+                ?? { up: 0, down: 0, myVote: null }
+            }
+          });
+          return;
+        }
+        if (url.pathname === '/api/v1/map-incidents') {
+          json(response, 200, { data: this.store.listMapIncidents(Date.now(), 30 * 60 * 1000, selectedBoroughs(url.searchParams)) });
           return;
         }
         if (url.pathname === '/api/events') {
@@ -261,7 +333,7 @@ export class DashboardServer {
         }
         if (url.pathname === '/api/incidents') {
           const deviceId = validVoteDeviceId(url.searchParams.get('deviceId'));
-          const incidents = this.store.search(url.searchParams.get('q') ?? '', selectedBoroughs(url.searchParams)).slice(0, 100)
+          const incidents = this.store.listIncidentPage(url.searchParams.get('q') ?? '', selectedBoroughs(url.searchParams), undefined, 100, 0).incidents
             .map((incident) => ({ ...incident, votes: this.incidentVotes?.getSummary(incident.id, deviceId) ?? { up: 0, down: 0, myVote: null } }));
           json(response, 200, { incidents });
           return;
@@ -366,6 +438,42 @@ export class DashboardServer {
   }
 
   private async handleAccountRoutes(request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
+    if (url.pathname === '/api/account/profile') {
+      if (!this.accounts || !this.authConfig) {
+        json(response, 503, { error: 'Account services are not configured on this server.' });
+        return true;
+      }
+      const session = this.accounts.getSession(this.readSessionToken(request));
+      if (!session?.account) {
+        json(response, 401, { error: 'Sign in with an account to manage your profile.' });
+        return true;
+      }
+      if (request.method === 'GET') {
+        json(response, 200, { username: session.account.username });
+        return true;
+      }
+      if (request.method !== 'PUT') {
+        json(response, 405, { error: 'Method not allowed.' });
+        return true;
+      }
+      if (!this.hasSameOrigin(request)) {
+        json(response, 403, { error: 'Request origin was not accepted.' });
+        return true;
+      }
+      if (!this.takeRateLimit(request, 'account-username-update', 10, 60 * 60_000)) {
+        json(response, 429, { error: 'Username updates are temporarily rate-limited.' });
+        return true;
+      }
+      try {
+        const body = await readJsonBody(request);
+        const username = await this.accounts.updateUsername(session.account.id, typeof body.username === 'string' ? body.username : '');
+        logger.info({ action: 'account-username-updated', accountId: session.account.id }, 'Account public username updated');
+        json(response, 200, { username });
+      } catch (error) {
+        json(response, 400, { error: error instanceof Error ? error.message : 'Could not update username.' });
+      }
+      return true;
+    }
     if (url.pathname === '/api/account/webhooks' || /^\/api\/account\/webhooks\/[a-f0-9]{32}$/i.test(url.pathname)) {
       if (!this.accounts || !this.authConfig) {
         json(response, 503, { error: 'Account services are not configured on this server.' });
@@ -489,7 +597,8 @@ export class DashboardServer {
         if (action === 'admin-invite-complete') {
           const token = typeof body.token === 'string' ? body.token : '';
           const password = typeof body.password === 'string' ? body.password : '';
-          const completed = await this.accounts.completeAdminInvitation(token, password);
+          const username = typeof body.username === 'string' ? body.username : '';
+          const completed = await this.accounts.completeAdminInvitation(token, password, username);
           this.setSessionCookie(response, completed.token);
           json(response, 200, { session: { kind: 'admin', account: completed.account }, message: 'Administrator account activated.' });
           return true;
@@ -517,8 +626,8 @@ export class DashboardServer {
               from: this.authConfig.smtpFrom,
               to: registered.account.email,
               subject: 'Verify your NYC Alert account',
-              text: verificationEmailText(registered.account.firstName, registered.account.accountType, verifyUrl.toString()),
-              html: verificationEmailHtml(registered.account.firstName, registered.account.accountType, verifyUrl.toString())
+              text: verificationEmailText(registered.account.username, registered.account.accountType, verifyUrl.toString()),
+              html: verificationEmailHtml(registered.account.username, registered.account.accountType, verifyUrl.toString())
             });
           } catch (error) {
             await this.accounts.deleteAccount(registered.account.id);
@@ -621,15 +730,15 @@ export class DashboardServer {
         return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/overview') {
-        const incidents = this.store.search();
+        const incidentCount = this.store.listIncidentPage('', undefined, undefined, 1, 0).total;
         const accounts = this.accounts.listAdminAccounts();
         const pendingIncidents = this.pendingIncidentProvider?.() ?? [];
         json(response, 200, {
-          incidents: incidents.length,
+          incidents: incidentCount,
           users: accounts.length,
           pendingUsers: accounts.filter((account) => account.status === 'pending-approval' || account.status === 'pending-verification').length,
           pendingIncidents: pendingIncidents.length,
-          dataWindow: 'current process only; resets when service restarts'
+          dataWindow: 'published incidents persist in SQLite; Live Radio calls and pending correlation state reset when service restarts'
         });
         return true;
       }
@@ -717,7 +826,7 @@ export class DashboardServer {
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/incidents') {
         const query = url.searchParams.get('q') ?? '';
-        json(response, 200, { incidents: this.store.search(query).slice(0, 300), ephemeral: true });
+        json(response, 200, { incidents: this.store.listIncidentPage(query, undefined, undefined, 300, 0).incidents, ephemeral: false });
         return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/incidents/pending') {
@@ -761,14 +870,17 @@ export class DashboardServer {
             json(response, 400, { error: 'Choose a valid incident category.' }); return true;
           }
           const incidentType = body.incidentType;
+          const callType = body.callType;
           if (incidentType !== undefined && !['medical', 'vehicle', 'fire', 'police', 'other'].includes(String(incidentType))) {
             json(response, 400, { error: 'Choose a valid incident type.' }); return true;
           }
+          if (callType !== undefined && callType !== '' && !isCallType(callType)) { json(response, 400, { error: 'Choose Fire, EMS, or PD.' }); return true; }
           const score = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.min(5, Math.round(value))) : 3;
           const confidence = typeof body.confidence === 'number' && Number.isFinite(body.confidence) ? Math.max(0, Math.min(1, body.confidence)) : 0.9;
           const incident = await this.store.publish({
             title: headline, headline, summary, occurredAt: new Date(), agency, borough,
             category: category as 'breaking' | 'newsworthy' | 'funny' | 'weird_unique',
+            ...(isCallType(callType) ? { callType } : {}),
             ...(location ? { location } : {}),
             ...(typeof incidentType === 'string' ? { incidentType: incidentType as 'medical' | 'vehicle' | 'fire' | 'police' | 'other' } : {}),
             confidence,
@@ -796,7 +908,11 @@ export class DashboardServer {
             const headline = typeof body.headline === 'string' ? body.headline.trim() : '';
             const summary = typeof body.summary === 'string' ? body.summary.trim() : '';
             const location = typeof body.location === 'string' ? body.location.trim() : '';
-            const incident = await this.store.adminEditIncident(incidentMatch[1]!, { headline, summary, location });
+            const callType = body.callType;
+            const incidentType = body.incidentType;
+            if (callType !== undefined && callType !== '' && !isCallType(callType)) { json(response, 400, { error: 'Choose Fire, EMS, or PD.' }); return true; }
+            if (incidentType !== undefined && !['medical', 'vehicle', 'fire', 'police', 'other'].includes(String(incidentType))) { json(response, 400, { error: 'Choose a valid detailed incident type.' }); return true; }
+            const incident = await this.store.adminEditIncident(incidentMatch[1]!, { headline, summary, location, ...(isCallType(callType) ? { callType } : {}), ...(typeof incidentType === 'string' ? { incidentType: incidentType as 'medical' | 'vehicle' | 'fire' | 'police' | 'other' } : {}) });
             if (incident) logger.info({ action: 'admin-incident-edited', actorId: adminSession.account?.id ?? 'bootstrap-admin', incidentId: incident.id }, 'Admin incident edited');
             json(response, incident ? 200 : 404, incident ? { incident } : { error: 'Incident not found.' });
           } catch (error) { json(response, 400, { error: error instanceof Error ? error.message : 'Could not edit incident.' }); }
@@ -907,8 +1023,8 @@ export class DashboardServer {
               from: this.authConfig.smtpFrom,
               to: invitation.account.email,
               subject: 'NYC Alert staff invitation',
-              text: `Hello ${invitation.account.firstName},\n\nYou have been invited to NYC Alert as a ${role}. Use this one-time link within 24 hours to set your password:\n${inviteUrl}\n\nNever share this link.`,
-              html: `<p>Hello ${escapeMailText(invitation.account.firstName)},</p><p>You have been invited to NYC Alert as a <strong>${role}</strong>. Use this one-time link within 24 hours to set your password:</p><p><a href="${escapeMailText(inviteUrl.toString())}">Accept staff invitation</a></p><p>Never share this link.</p>`
+              text: `Hello,\n\nYou have been invited to NYC Alert as a ${role}. Use this one-time link within 24 hours to choose your public username and set your password:\n${inviteUrl}\n\nNever share this link.`,
+              html: `<p>You have been invited to NYC Alert as a <strong>${role}</strong>. Use this one-time link within 24 hours to choose your public username and set your password:</p><p><a href="${escapeMailText(inviteUrl.toString())}">Accept staff invitation</a></p><p>Never share this link.</p>`
             });
           } catch (error) {
             await this.accounts.deleteAdministrator(invitation.account.id);
@@ -1042,6 +1158,7 @@ export class DashboardServer {
       }
       const result = this.incidentVotes.castVote(incident, deviceId, body.vote);
       if (result.accepted) {
+        if (body.vote === 'up') this.broadcastCommunityUpvote({ kind: 'incident', id: incident.id, title: incident.title, agency: incident.agency, borough: incident.borough });
         this.learningLog?.recordIncidentFeedback({
           incidentId: incident.id,
           vote: body.vote,
@@ -1115,6 +1232,9 @@ export class DashboardServer {
         return;
       }
       const result = this.incidentVotes.castLiveCallVote(call, deviceId, body.vote);
+      if (result.accepted && body.vote === 'up') this.broadcastCommunityUpvote({
+        kind: 'live-call', id: call.id, title: call.headline || `${call.agency} radio report`, agency: call.agency, borough: call.borough
+      });
       const shouldPromote = qualifiesForCommunityPromotion(call, result);
       const promotedIncident = shouldPromote
         ? await this.store.promoteLiveCallFromCommunity(call.id, result)
@@ -1149,6 +1269,19 @@ export class DashboardServer {
         : this.authConfig?.publicUrl.startsWith('https://') ? 'https:' : 'http:';
       return originUrl.host.toLowerCase() === host.toLowerCase() && originUrl.protocol === expectedProto;
     } catch { return false; }
+  }
+
+  private broadcastCommunityUpvote(input: { kind: 'incident' | 'live-call'; id: string; title: string; agency: Agency; borough: Borough | 'Citywide' }): void {
+    const event = JSON.stringify({
+      kind: input.kind,
+      id: input.id,
+      title: input.title.replace(/[\r\n]+/g, ' ').slice(0, 140),
+      agency: input.agency,
+      borough: input.borough
+    });
+    for (const client of this.eventClients) {
+      if (!client.destroyed && !client.writableEnded) client.write(`event: community-upvote\ndata: ${event}\n\n`);
+    }
   }
 
   private takeRateLimit(request: IncomingMessage, action: string, maximum: number, windowMs: number, scope: 'ip' | 'global' = 'ip'): boolean {
@@ -1234,8 +1367,9 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
 }
 
 function validateRegistration(body: Record<string, unknown>): {
-  firstName: string; lastName: string; email: string; phone: string; usageCase: string; accountType: AudienceAccountType; password: string;
+  username: string; firstName: string; lastName: string; email: string; phone: string; usageCase: string; accountType: AudienceAccountType; password: string;
 } {
+  const username = textForUsername(body.username);
   const text = (key: string, max: number): string => typeof body[key] === 'string' ? body[key].trim().slice(0, max) : '';
   const firstName = text('firstName', 80);
   const lastName = text('lastName', 80);
@@ -1245,12 +1379,17 @@ function validateRegistration(body: Record<string, unknown>): {
   const password = typeof body.password === 'string' ? body.password : '';
   const accountType = body.accountType;
   if (!firstName || !lastName) throw new Error('Enter your first and last name.');
+  if (!username) throw new Error('Username must be 3–24 characters using letters, numbers, or underscores.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email address.');
   if (phone.length < 7) throw new Error('Enter a contact phone number.');
   if (usageCase.length < 10) throw new Error('Please describe how you will use the account (at least 10 characters).');
   if (password.length < 12 || password.length > 128) throw new Error('Password must be between 12 and 128 characters.');
   if (accountType !== 'buff' && accountType !== 'news') throw new Error('Choose Buff or News Media account access.');
-  return { firstName, lastName, email, phone, usageCase, accountType, password };
+  return { username, firstName, lastName, email, phone, usageCase, accountType, password };
+}
+
+function textForUsername(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function safeSecretEqual(left: string, right: string): boolean {
@@ -1281,7 +1420,7 @@ function renderSitemapXml(store: DashboardStore, publicUrl: string, settings: Si
   const urls = [
     `<url><loc>${escapeXml(homepage)}</loc><changefreq>hourly</changefreq><priority>1.0</priority><image:image><image:loc>${escapeXml(imageUrl)}</image:loc><image:title>${escapeXml(settings.openGraphTitle || 'NYC Alert — Public Safety Desk')}</image:title></image:image></url>`
   ];
-  for (const incident of store.search()) {
+  for (const incident of store.listIncidentPage('', undefined, undefined, 5_000, 0).incidents) {
     const loc = new URL(`/incident/${encodeURIComponent(incident.id)}`, publicUrl).toString();
     const lastmodDate = new Date(incident.updatedAt || incident.occurredAt);
     const lastmod = Number.isNaN(lastmodDate.getTime()) ? '' : `<lastmod>${lastmodDate.toISOString()}</lastmod>`;
