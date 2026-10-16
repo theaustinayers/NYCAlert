@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import OpenAI from 'openai';
-import { curateIncidentHeadline, curateRoutineUpdateHeadline, curateRoutineUpdateSummary, explicitFdnyAirportAlarm, explicitFdnyThirdAlarmOrHigher, normalizeIncidentHeadline, type CallTriage } from '../domain/triage.js';
+import { applyFdnyTenSeventyFiveOverride, curateIncidentHeadline, curateRoutineUpdateHeadline, curateRoutineUpdateSummary, explicitFdnyAirportAlarm, explicitFdnyThirdAlarmOrHigher, normalizeIncidentHeadline, type CallTriage } from '../domain/triage.js';
 import type { Agency } from '../domain/subscriptions.js';
 import { nypdRadioInterpretationCaution, nypdRadioReference } from '../domain/nypd-radio-reference.js';
 
@@ -118,7 +118,7 @@ export class OpenAiTriageProvider implements TriageProvider {
     const assignmentDeskScore = airportAlarm ? Math.max(2, Math.max(1, Math.min(5, rawDeskScore))) : Math.max(1, Math.min(5, rawDeskScore));
     const rawHeadline = typeof parsed.headline === 'string' ? parsed.headline.slice(0, 160) : undefined;
     const rawSummary = typeof parsed.summary === 'string' ? parsed.summary.slice(0, 700) : undefined;
-    return {
+    const result: CallTriage = {
       shouldAlert: parsed.shouldAlert === true && category !== 'routine',
       category: category as CallTriage['category'],
       headline: normalizeIncidentHeadline(curateIncidentHeadline(
@@ -134,6 +134,7 @@ export class OpenAiTriageProvider implements TriageProvider {
       buffInterestScore,
       assignmentDeskScore
     };
+    return applyFdnyTenSeventyFiveOverride(result, transcript, agency);
   }
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { curateIncidentHeadline, curateRoutineUpdateHeadline, curateRoutineUpdateSummary, explicitFdnyAirportAlarm, explicitFdnyThirdAlarmOrHigher, normalizeIncidentHeadline, shouldNotify, type CallTriage } from './triage.js';
+import { curateIncidentHeadline, curateRoutineUpdateHeadline, curateRoutineUpdateSummary, explicitFdnyAirportAlarm, explicitFdnyTenSeventyFive, explicitFdnyThirdAlarmOrHigher, normalizeIncidentHeadline, shouldNotify, type CallTriage } from './triage.js';
 
 const result: CallTriage = { shouldAlert: true, category: 'breaking', summary: 'Dispatch reports a major incident.', confidence: 0.9, newsworthinessScore: 5 };
 
@@ -30,6 +30,21 @@ describe('explicitFdnyThirdAlarmOrHigher', () => {
     assert.equal(explicitFdnyThirdAlarmOrHigher('Second alarm transmitted.', 'FDNY'), false);
     assert.equal(explicitFdnyThirdAlarmOrHigher('Third alarm reported.', 'NYPD'), false);
     assert.equal(explicitFdnyThirdAlarmOrHigher('Engine 3 responding to alarm.', 'FDNY'), false);
+  });
+});
+
+describe('explicitFdnyTenSeventyFive', () => {
+  it('recognizes explicit numeric and spoken FDNY 10-75 assignments', () => {
+    assert.equal(explicitFdnyTenSeventyFive('Transmitting 10-75.', 'FDNY'), true);
+    assert.equal(explicitFdnyTenSeventyFive('Transmit 10 75.', 'FDNY'), true);
+    assert.equal(explicitFdnyTenSeventyFive('Ten-Seventy Five transmitted.', 'FDNY'), true);
+    assert.equal(explicitFdnyTenSeventyFive('Ten Seventy-Five.', 'FDNY'), true);
+  });
+
+  it('does not match incidental digits or NYPD transcripts', () => {
+    assert.equal(explicitFdnyTenSeventyFive('Engine 10 and Ladder 75 responding.', 'FDNY'), false);
+    assert.equal(explicitFdnyTenSeventyFive('10-75 reported on the radio.', 'NYPD'), false);
+    assert.equal(explicitFdnyTenSeventyFive('Ten seventy, five units responding.', 'FDNY'), false);
   });
 });
 

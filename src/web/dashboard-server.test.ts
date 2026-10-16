@@ -298,6 +298,37 @@ describe('DashboardServer account routes', () => {
     }
   });
 
+  it('restricts settings, analytics, webhooks, and staff data to admin roles, not moderators', async () => {
+    const port = await availablePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const accounts = new AccountStore(join(testDirectory, 'moderator-admin-only-sections'));
+    await accounts.init();
+    const invitation = await accounts.inviteAdministrator({
+      firstName: 'Morgan', lastName: 'Moderator', email: 'moderator-access@example.test', role: 'moderator'
+    });
+    const moderator = await accounts.completeAdminInvitation(invitation.invitationToken, 'Strong-moderator-password-123', 'morgan_moderator');
+    const server = new DashboardServer(new DashboardStore(false), port, '127.0.0.1', undefined, accounts, {
+      publicUrl: origin, trustProxy: true
+    });
+    await server.start();
+    const cookie = `nycalert_session=${moderator.token}`;
+    try {
+      assert.equal((await fetch(`${origin}/api/admin/incidents`, { headers: { Cookie: cookie } })).status, 200);
+      for (const path of [
+        '/api/admin/webhooks',
+        '/api/admin/analytics',
+        '/api/admin/administrators',
+        '/api/admin/learning-log',
+        '/api/admin/learning-log/export',
+        '/api/admin/deployment-update',
+        '/api/admin/x-test'
+      ]) {
+        const response = await fetch(`${origin}${path}`, { headers: { Cookie: cookie } });
+        assert.equal(response.status, 403, `${path} should be admin-only`);
+      }
+    } finally { await server.stop(); }
+  });
+
   it('saves dashboard preferences only for the authenticated account and same origin', async () => {
     const port = await availablePort();
     const origin = `http://127.0.0.1:${port}`;

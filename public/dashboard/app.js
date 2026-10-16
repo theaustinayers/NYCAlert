@@ -5,6 +5,7 @@ const state = {
   tickerQueue: [], tickerActive: false, tickerIndex: 0, tickerRotationTimer: null, tickerOverrideTimer: null,
   tickerFeaturedIncident: null, tickerFeaturedUntil: 0, tickerFeaturedTimer: null,
   map: null, mapLayer: null, mapMarkers: new Map(), mapHasFitBounds: false, mapTimer: null, mapExpiryTimer: null, mapEvents: null,
+  mapFocusedIncidentId: null, mapPreviousView: null,
   mapRefreshTimer: null, mapRefreshSequence: 0, liveUpdates: null, authSession: null, pendingAudience: null,
   preferenceSaveTimer: null, preferenceSaveQueue: Promise.resolve(), applyingPreferences: false, presenceTimer: null,
   lastCommunityPromptAt: 0, communityPromptTimer: null,
@@ -12,6 +13,9 @@ const state = {
   feedMeterTargets: new Map(), feedMeterAnimationFrame: 0, lastFeedMeterFrameAt: 0
 };
 const voteDeviceId = getVoteDeviceId();
+  if (state.mapFocusedIncidentId && !visible.some((incident) => incident.id === state.mapFocusedIncidentId)) {
+    restoreIncidentMapView();
+  }
 const presenceBrowserToken = getPresenceBrowserToken();
 const $ = (selector) => document.querySelector(selector);
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -308,6 +312,7 @@ function renderIncidents() {
     .sort(compareIncidents);
   $('#incident-count').textContent = String(visible.length).padStart(2, '0');
   if (!visible.length) {
+    if (state.mapFocusedIncidentId) restoreIncidentMapView();
     $('#incident-list').innerHTML = `<div class="empty-state"><span class="empty-symbol">⌁</span><strong>${state.query ? 'No matching incidents' : 'All quiet on the board'}</strong><p>${state.query ? 'Try another search or clear the active filters.' : 'Qualified incidents will appear here when reviewed and published.'}</p><span class="empty-foot">NO ROUTINE CALLS SHOWN</span></div>`;
     delete $('#incident-list').dataset.leadingMarkup;
     return;
@@ -325,7 +330,7 @@ function renderIncidents() {
     const isBreaking = newsScore === 5;
       const presentation = newsScore >= 5 ? 'BREAKING' : newsScore >= 4 ? 'DEVELOPING' : newsScore >= 3 ? 'INCIDENT' : newsScore >= 2 ? 'ACTIVITY' : 'NONE';
     return `
-    <article class="incident-card category-${isBreaking ? 'breaking' : 'newsworthy'} ${state.freshIncidentIds.has(incident.id) && state.freshIncidentIds.get(incident.id) > Date.now() ? 'is-new-incident' : ''} ${state.incidentArrivalId === incident.id ? 'is-arrival-highlight' : ''}" data-incident-card-id="${escapeHtml(incident.id)}">
+    <article class="incident-card category-${isBreaking ? 'breaking' : 'newsworthy'} ${state.freshIncidentIds.has(incident.id) && state.freshIncidentIds.get(incident.id) > Date.now() ? 'is-new-incident' : ''} ${state.incidentArrivalId === incident.id ? 'is-arrival-highlight' : ''}" data-incident-card-id="${escapeHtml(incident.id)}" tabindex="0" aria-label="Focus incident on map: ${escapeHtml(incident.title)}">
       <div class="incident-meta"><span class="category-tag ${isBreaking ? 'breaking' : newsScore >= 4 ? 'developing' : 'newsworthy'}">${presentation}</span>${topType ? `<span class="call-type-badge call-type-${topType}">${callTypeLabel(topType)}</span>` : ''}<span class="borough-tag">${escapeHtml((incident.agencies?.length ? incident.agencies : [incident.agency]).join(' + '))} · ${escapeHtml(boroughCode(incident.borough))}</span><time class="incident-time">${escapeHtml(formatTime(incident.occurredAt))}</time></div>
       <h3>${escapeHtml(incident.title)}</h3><p>${escapeHtml(incident.summary)}</p>
       ${incident.communitySelected ? '<p class="community-selected-note">COMMUNITY SELECTED · NOT INDEPENDENTLY VERIFIED</p>' : ''}
@@ -398,6 +403,67 @@ function wireIncidentShareControls() {
       feedback.textContent = incidentUrl;
     });
   }, true);
+}
+
+function wireIncidentMapFocus() {
+  const list = $('#incident-list');
+  list.addEventListener('click', (event) => {
+    if (event.target.closest('button, a, input, audio, details, summary, [contenteditable="true"]')) return;
+    const card = event.target.closest('[data-incident-card-id]');
+    if (!card || !list.contains(card)) return;
+    focusIncidentOnMap(card.dataset.incidentCardId);
+  });
+  list.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (event.target.closest('button, a, input, audio, details, summary, [contenteditable="true"]')) return;
+    const card = event.target.closest('[data-incident-card-id]');
+    if (!card || !list.contains(card)) return;
+    event.preventDefault();
+    focusIncidentOnMap(card.dataset.incidentCardId);
+  });
+}
+
+function focusIncidentOnMap(incidentId) {
+  if (!state.map || !state.mapMarkers.has(incidentId)) {
+     showIncidentMapMessage('No verified map pin is available for this incident.');
+    return;
+  }
+  if (state.mapFocusedIncidentId === incidentId) {
+    restoreIncidentMapView();
+    return;
+  }
+  if (!state.mapPreviousView) {
+    state.mapPreviousView = { center: state.map.getCenter(), zoom: state.map.getZoom() };
+  }
+  state.mapFocusedIncidentId = incidentId;
+  document.querySelectorAll('[data-incident-card-id].map-focused').forEach((card) => card.classList.remove('map-focused'));
+  const card = [...$('#incident-list').querySelectorAll('[data-incident-card-id]')].find((item) => item.dataset.incidentCardId === incidentId);
+  card?.classList.add('map-focused');
+  const marker = state.mapMarkers.get(incidentId);
+  state.map.flyTo(marker.getLatLng(), Math.max(state.map.getZoom(), 15), { duration: 0.55 });
+  marker.openPopup();
+  $('#incident-map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function restoreIncidentMapView() {
+  if (state.mapFocusedIncidentId) {
+    const card = [...$('#incident-list').querySelectorAll('[data-incident-card-id]')].find((item) => item.dataset.incidentCardId === state.mapFocusedIncidentId);
+    card?.classList.remove('map-focused');
+    state.mapMarkers.get(state.mapFocusedIncidentId)?.closePopup();
+  }
+  state.mapFocusedIncidentId = null;
+  if (state.map && state.mapPreviousView) {
+    state.map.flyTo(state.mapPreviousView.center, state.mapPreviousView.zoom, { duration: 0.55 });
+  }
+  state.mapPreviousView = null;
+
+  function showIncidentMapMessage(message) {
+    const toast = $('#toast');
+    toast.textContent = message;
+    toast.classList.add('show');
+    if (state.incidentMapToastTimer) clearTimeout(state.incidentMapToastTimer);
+    state.incidentMapToastTimer = setTimeout(() => toast.classList.remove('show'), 3500);
+  }
 }
 
 function wireIncidentVoting() {
@@ -659,6 +725,7 @@ async function refreshMap() {
     if (sequence !== state.mapRefreshSequence) return;
     const incidents = Array.isArray(data.incidents) ? data.incidents : [];
     const currentIds = new Set(incidents.map((incident) => incident.id));
+    if (state.mapFocusedIncidentId && !currentIds.has(state.mapFocusedIncidentId)) restoreIncidentMapView();
     for (const [id, marker] of state.mapMarkers) {
       if (!currentIds.has(id)) {
         state.mapLayer.removeLayer(marker);
@@ -776,6 +843,9 @@ $('#community-review-action').addEventListener('click', (event) => {
 function initializeMap() {
   if (!window.L || state.map) return;
   state.map = L.map('incident-map', { scrollWheelZoom: false }).setView([40.7128, -73.95], 10);
+  state.map.on('click', () => {
+    if (state.mapFocusedIncidentId) restoreIncidentMapView();
+  });
   L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
     maxZoom: 19,
     maxNativeZoom: 19,
@@ -1010,6 +1080,7 @@ async function initialize() {
   initializeIncidentPopupControls();
   wireAuthControls();
   wireIncidentShareControls();
+  wireIncidentMapFocus();
   wireIncidentVoting();
   wireLiveCallVoting();
   await loadAuthSession();

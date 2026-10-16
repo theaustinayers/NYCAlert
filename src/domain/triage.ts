@@ -129,6 +129,22 @@ export function explicitFdnyThirdAlarmOrHigher(transcript: string, agency?: Agen
     .some((match) => Number(match[1]) >= 3);
 }
 
+/** FDNY 10-75 assignments are deterministically marked Breaking / Public 5/5. */
+export function explicitFdnyTenSeventyFive(transcript: string, agency?: Agency): boolean {
+  if (agency !== 'FDNY') return false;
+  return /\b(?:10\s*[- ]\s*75|ten\s*[- ]\s*seventy\s*[- ]\s*five)\b/i.test(transcript);
+}
+
+/** Apply the explicit FDNY 10-75 editorial rule without changing reported factual wording. */
+export function applyFdnyTenSeventyFiveOverride(
+  result: CallTriage,
+  transcript: string,
+  agency?: Agency
+): CallTriage {
+  if (!explicitFdnyTenSeventyFive(transcript, agency)) return result;
+  return { ...result, shouldAlert: true, category: 'breaking', newsworthinessScore: 5 };
+}
+
 /** Airport context raises an explicit FDNY alarm above generic routine traffic, but does not imply danger. */
 export function explicitFdnyAirportAlarm(transcript: string, agency?: Agency): boolean {
   if (agency !== 'FDNY') return false;

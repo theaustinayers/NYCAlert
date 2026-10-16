@@ -1,6 +1,6 @@
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
-const state = { section: 'users', session: null, users: [], incidents: [], pending: [], webhooks: [], learningEvents: [], learningStatus: null, deploymentUpdateStatus: null };
+const state = { section: 'users', session: null, isAdmin: false, users: [], incidents: [], pending: [], webhooks: [], learningEvents: [], learningStatus: null, deploymentUpdateStatus: null };
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const formatTime = (value) => {
   const date = new Date(value);
@@ -57,11 +57,15 @@ async function init() {
     window.location.replace('/?auth=login');
     return;
   }
+  state.isAdmin = ['owner', 'admin'].includes(state.session.role || state.session.account?.adminRole);
+  document.querySelectorAll('[data-admin-only]').forEach((element) => { element.hidden = !state.isAdmin; });
   $('#admin-session-label').textContent = state.session.account?.email || 'Administrator session';
   activateSection('users');
-  await Promise.all([loadOverview(), loadUsers(), loadAdministrators(), loadIncidents(), loadWebhooks(), loadAnalytics(), loadLearningLog(), loadDeploymentUpdateStatus()]);
+  const tasks = [loadOverview(), loadUsers(), loadIncidents()];
+  if (state.isAdmin) tasks.push(loadAdministrators(), loadWebhooks(), loadAnalytics(), loadLearningLog(), loadDeploymentUpdateStatus());
+  await Promise.all(tasks);
   window.setInterval(() => {
-    if (state.section === 'settings') void loadDeploymentUpdateStatus();
+    if (state.isAdmin && state.section === 'settings') void loadDeploymentUpdateStatus();
   }, 5000);
 }
 
@@ -71,6 +75,8 @@ function wireNavigation() {
 }
 
 function activateSection(name) {
+  const targetSection = $(`#section-${name}`);
+  if (targetSection?.hasAttribute('data-admin-only') && !state.isAdmin) name = 'users';
   state.section = name;
   $$('.admin-nav-item').forEach((button) => button.classList.toggle('active', button.dataset.section === name));
   $$('.admin-section').forEach((section) => {
@@ -93,7 +99,7 @@ function activateSection(name) {
 }
 
 async function refreshCurrent() {
-  if (state.section === 'users') return Promise.all([loadOverview(), loadUsers(), loadAdministrators()]);
+  if (state.section === 'users') return Promise.all([loadOverview(), loadUsers(), ...(state.isAdmin ? [loadAdministrators()] : [])]);
   if (state.section === 'incidents') return loadIncidents();
   if (state.section === 'webhooks') return loadWebhooks();
   if (state.section === 'analytics') return loadAnalytics();

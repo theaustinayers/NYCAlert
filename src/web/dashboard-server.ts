@@ -758,24 +758,14 @@ export class DashboardServer {
       const isAdmin = role === 'owner' || role === 'admin';
       const canModerate = isAdmin || role === 'moderator';
       const mutating = request.method === 'POST' || request.method === 'PUT' || request.method === 'PATCH' || request.method === 'DELETE';
-      if (mutating && url.pathname.startsWith('/api/admin/administrators') && !isAdmin) {
-        json(response, 403, { error: 'Only administrators can manage staff accounts.' });
-        return true;
-      }
-      if (mutating && url.pathname.startsWith('/api/admin/webhooks') && !isAdmin) {
-        json(response, 403, { error: 'Only administrators can manage webhook assignments.' });
-        return true;
-      }
-      if (mutating && (url.pathname === '/api/admin/analytics' || url.pathname === '/api/admin/learning-log') && !isAdmin) {
-        json(response, 403, { error: 'Only administrators can change settings or clear learning data.' });
-        return true;
-      }
-      if (url.pathname.startsWith('/api/admin/deployment-update') && !isAdmin) {
-        json(response, 403, { error: 'Only administrators can run website updates.' });
-        return true;
-      }
-      if (url.pathname.startsWith('/api/admin/x-test') && !isAdmin) {
-        json(response, 403, { error: 'Only administrators can test X integration.' });
+      const adminOnlyPath = url.pathname.startsWith('/api/admin/administrators')
+        || url.pathname.startsWith('/api/admin/webhooks')
+        || url.pathname.startsWith('/api/admin/analytics')
+        || url.pathname.startsWith('/api/admin/learning-log')
+        || url.pathname.startsWith('/api/admin/deployment-update')
+        || url.pathname.startsWith('/api/admin/x-test');
+      if (adminOnlyPath && !isAdmin) {
+        json(response, 403, { error: 'Only administrators can access staff, webhooks, analytics, and settings.' });
         return true;
       }
       if (mutating && (url.pathname.startsWith('/api/admin/incidents') || url.pathname.startsWith('/api/admin/accounts')) && !canModerate) {
