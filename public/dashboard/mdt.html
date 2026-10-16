@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07100e">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="description" content="NYC Alert incident operations view. Simulation interface using published incident information.">
+  <title>MDT Incident View — NYC Alert</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/mdt.css">
+  <link rel="stylesheet" href="/mdt-pagination.css">
+  <script src="/mdt.js?v=mdt-live-incidents-20261015-1" defer></script>
+</head>
+<body>
+  <main class="mdt-shell">
+    <header class="mdt-topbar">
+      <a class="mdt-brand" href="/" aria-label="Return to NYC Alert"><span class="brand-mark">NYC</span><span><strong>NYC ALERT</strong><small>INCIDENT OPERATIONS VIEW</small></span></a>
+      <div class="mdt-clock-wrap"><span class="simulation-label">SIMULATION · PUBLIC INCIDENT DATA</span><time id="mdt-clock">--:--:-- ET</time></div>
+      <a class="mdt-exit" href="/">EXIT MDT VIEW ↗</a>
+    </header>
+
+    <nav class="mdt-command-bar" aria-label="MDT view controls">
+      <button class="command-button active" type="button" data-view="all" aria-pressed="true">LIVE STREAM</button>
+      <button class="command-button" type="button" data-view="incidents" aria-pressed="false">INCIDENTS</button>
+      <button class="command-button" type="button" data-view="updates" aria-pressed="false">UPDATES</button>
+      <button class="command-button" type="button" data-view="history" aria-pressed="false">HISTORY</button>
+      <span class="command-spacer"></span>
+      <label class="mdt-search"><span>SEARCH</span><input id="mdt-search" type="search" placeholder="Headline, location, unit…" autocomplete="off"></label>
+      <button class="command-button command-clear" id="mdt-refresh" type="button">REFRESH</button>
+    </nav>
+
+    <div class="mdt-workspace">
+      <aside class="mdt-rail" aria-label="Incident controls">
+        <section class="rail-module">
+          <h2>DISPATCH INFO</h2>
+          <div class="rail-status"><i id="mdt-live-dot"></i><span id="mdt-connection">CONNECTING</span></div>
+          <div class="rail-metric"><span>ACTIVE INCIDENTS</span><strong id="mdt-total">—</strong></div>
+          <div class="rail-metric"><span>NEW / UPDATED</span><strong id="mdt-changes">0</strong></div>
+          <div class="rail-metric"><span>LAST SYNC</span><strong id="mdt-last-sync">—</strong></div>
+        </section>
+        <section class="rail-module">
+          <h2>CALL TYPE</h2>
+          <div class="rail-filters" role="group" aria-label="Filter incident type">
+            <button class="rail-filter active" type="button" data-call-type="all" aria-pressed="true">ALL <span id="count-all">—</span></button>
+            <button class="rail-filter" type="button" data-call-type="fire" aria-pressed="false">FIRE <span id="count-fire">—</span></button>
+            <button class="rail-filter" type="button" data-call-type="ems" aria-pressed="false">EMS <span id="count-ems">—</span></button>
+            <button class="rail-filter" type="button" data-call-type="pd" aria-pressed="false">PD <span id="count-pd">—</span></button>
+          </div>
+        </section>
+        <section class="rail-module">
+          <h2>SELECT BOROUGH</h2>
+          <select id="mdt-borough" aria-label="Filter by borough">
+            <option value="all">ALL BOROUGHS</option>
+            <option>Manhattan</option><option>Bronx</option><option>Brooklyn</option><option>Queens</option><option>Staten Island</option>
+          </select>
+        </section>
+        <section class="rail-module rail-notice">
+          <h2>DATA NOTICE</h2>
+          <p>Published incidents and their updates only. This view does not display Live Radio traffic, raw transcripts, or dispatch commands. NYC Alert is not an official FDNY system.</p>
+        </section>
+      </aside>
+
+      <section class="mdt-main" aria-label="Live published incident stream">
+        <div class="stream-heading"><div><span class="stream-kicker">INCIDENT RECORD · LIVE SYNC</span><h1 id="stream-title">Published Incidents</h1></div><span class="stream-count" id="stream-count">LOADING</span></div>
+        <div class="stream-legend"><span><i class="legend-new"></i> NEW INCIDENT</span><span><i class="legend-update"></i> INCIDENT UPDATE</span><span><i class="legend-info"></i> REPORTED INFORMATION</span></div>
+        <div class="incident-stream" id="incident-stream" tabindex="0" aria-live="polite" aria-label="Chronological incident and update entries">
+          <div class="stream-placeholder"><span class="terminal-cursor"></span> Connecting to published incident feed…</div>
+        </div>
+        <div class="stream-pagination"><button id="mdt-load-older" type="button" hidden>LOAD OLDER INCIDENTS</button><span id="mdt-history-position"></span></div>
+        <footer class="mdt-footer"><span>NYC ALERT · SIMULATED MDT DISPLAY</span><span>AI-ASSISTED REPORTING · VERIFY INDEPENDENTLY</span></footer>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
