@@ -8,7 +8,7 @@ const state = {
   mapRefreshTimer: null, mapRefreshSequence: 0, liveUpdates: null, authSession: null, pendingAudience: null,
   preferenceSaveTimer: null, preferenceSaveQueue: Promise.resolve(), applyingPreferences: false, presenceTimer: null,
   lastCommunityPromptAt: 0, communityPromptTimer: null,
-  incidentPopupEnabled: true, incidentArrivalTimer: null, incidentArrivalId: null, callTypeFilter: 'all',
+  incidentPopupEnabled: true, incidentArrivalTimer: null, incidentArrivalId: null,
   feedMeterTargets: new Map(), feedMeterAnimationFrame: 0, lastFeedMeterFrameAt: 0
 };
 const voteDeviceId = getVoteDeviceId();
@@ -303,7 +303,6 @@ function isRecent(value) {
 
 function renderIncidents() {
   const visible = state.incidents
-    .filter((incident) => state.callTypeFilter === 'all' || getCallType(incident) === state.callTypeFilter)
     .filter((incident) => state.boroughs.has(incident.borough) || (state.boroughs.size > 0 && incident.borough === 'Citywide'))
     .filter((incident) => state.agency === 'all' || (incident.agencies?.includes(state.agency) ?? incident.agency === state.agency))
     .sort(compareIncidents);
@@ -759,7 +758,6 @@ function initializeMap() {
 function renderLiveCalls() {
   const visible = state.calls.filter((call) => (state.boroughs.has(call.borough) || (state.boroughs.size > 0 && call.borough === 'Citywide'))
     && (state.agency === 'all' || call.agency === state.agency)
-    && (state.callTypeFilter === 'all' || getCallType(call) === state.callTypeFilter)
     && (!state.liveCategories || state.liveCategories.has(call.category)));
   renderLiveCategoryControls(visible.length);
   if (!visible.length) {
@@ -975,7 +973,6 @@ async function heartbeatPresence() {
 
 async function initialize() {
   initializeIncidentPopupControls();
-  initializeCallTypeFilters();
   wireAuthControls();
   wireIncidentShareControls();
   wireIncidentVoting();
@@ -1008,19 +1005,6 @@ async function initialize() {
   });
   await refresh();
   setInterval(refresh, 15000);
-}
-
-function initializeCallTypeFilters() {
-  document.querySelectorAll('[data-call-type]').forEach((button) => button.addEventListener('click', () => {
-    state.callTypeFilter = ['fire', 'ems', 'pd'].includes(button.dataset.callType) ? button.dataset.callType : 'all';
-    document.querySelectorAll('[data-call-type]').forEach((item) => {
-      const selected = item.dataset.callType === state.callTypeFilter;
-      item.classList.toggle('active', selected);
-      item.setAttribute('aria-pressed', String(selected));
-    });
-    renderIncidents();
-    renderLiveCalls();
-  }));
 }
 
 function initializeIncidentPopupControls() {

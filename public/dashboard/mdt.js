@@ -5,9 +5,6 @@ const state = {
   latestIncidentAt: null,
   started: false,
   view: 'all',
-  callType: 'all',
-  borough: 'all',
-  query: '',
   lastSignature: '',
   nextOffset: 0,
   total: 0,
@@ -19,18 +16,9 @@ const state = {
   following: true
 };
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-const callTypeFor = (incident) => {
-  if (['fire', 'ems', 'pd'].includes(incident.callType)) return incident.callType;
-  if (incident.incidentType === 'fire') return 'fire';
-  if (incident.incidentType === 'medical') return 'ems';
-  if (incident.incidentType === 'police') return 'pd';
-  if (incident.incidentType === 'vehicle') return incident.agency === 'FDNY' ? 'fire' : incident.agency === 'NYPD' ? 'pd' : undefined;
-  return undefined;
-};
-const callTypeName = (type) => ({ fire: 'FIRE', ems: 'EMS', pd: 'PD' })[type] || 'UNCLASSIFIED';
 
 function updateClock() {
-  $('#mdt-clock').textContent = `${new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())} ET`;
+  $('#mdt-clock').textContent = `${new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date())} ET`;
 }
 
 function formatStamp(value) {
@@ -78,9 +66,6 @@ async function loadIncidents({ announce = false, append = false } = {}) {
   if (!state.started) return;
   const offset = append ? state.nextOffset : 0;
   const params = new URLSearchParams({ limit: '100', offset: String(offset) });
-  if (state.callType !== 'all') params.set('callType', state.callType);
-  if (state.borough !== 'all') params.append('borough', state.borough);
-  if (state.query) params.set('q', state.query);
   const scroll = $('#incident-stream');
   const wasAtBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 60;
   try {
@@ -88,8 +73,8 @@ async function loadIncidents({ announce = false, append = false } = {}) {
     if (!response.ok) throw new Error(`Incident API returned ${response.status}`);
     const result = await response.json();
     const incidents = Array.isArray(result.data) ? result.data : [];
-    const unfiltered = state.callType === 'all' && state.borough === 'all' && !state.query;
-    void refreshLatestIncident(unfiltered ? incidents : undefined);
+    setConnection(true);
+    if (!append) void refreshLatestIncident(incidents);
     const signature = incidentSignature(incidents);
     if (announce && !append && state.lastSignature && signature !== state.lastSignature) state.changeCount += 1;
     if (append) {
@@ -107,6 +92,7 @@ async function loadIncidents({ announce = false, append = false } = {}) {
     state.hasMore = Boolean(result.page?.hasMore);
     render();
     $('#mdt-total').textContent = String(Number(result.page?.total) || incidents.length);
+    $('#mdt-message-count').textContent = String(state.incidents.length);
     $('#mdt-last-sync').textContent = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false });
     if (wasAtBottom || state.following) scroll.scrollTop = scroll.scrollHeight;
   } catch {
@@ -118,24 +104,23 @@ async function loadIncidents({ announce = false, append = false } = {}) {
 }
 
 function setConnection(online) {
-  $('#mdt-connection').textContent = online ? 'LIVE CONNECTION' : 'RECONNECTING';
-  $('#mdt-live-dot').classList.toggle('offline', !online);
+  $('#mdt-connection').textContent = online ? 'INCIDENT FEED READY · PUBLIC DATA' : 'INCIDENT FEED RECONNECTING';
+  $('#mdt-connection').classList.toggle('reconnecting', !online);
 }
 
 function buildEntries() {
   const entries = [];
   for (const incident of state.incidents) {
-    const type = callTypeFor(incident);
     entries.push({
       id: `${incident.id}:new`, incidentId: incident.id, kind: 'new', at: incident.occurredAt,
-      incident, agency: incident.agency, borough: incident.borough, type,
+      incident, agency: incident.agency, borough: incident.borough,
       title: String(incident.title || 'Published incident').split(' | ')[0], summary: incident.summary,
       location: incident.location, units: incident.unitIds || [], boxes: incident.boxNumbers || []
     });
     for (const [index, update] of (incident.updates || []).entries()) {
       entries.push({
         id: `${incident.id}:update:${index}`, incidentId: incident.id, kind: 'update', at: update.occurredAt,
-        incident, agency: update.agency || incident.agency, borough: incident.borough, type,
+        incident, agency: update.agency || incident.agency, borough: incident.borough,
         title: update.headline || 'Incident update', summary: update.summary,
         location: update.location, previousLocation: update.previousLocation,
         units: update.unitIds || [], boxes: update.boxNumbers || []
@@ -157,12 +142,8 @@ function render() {
   $('#mdt-load-older').hidden = !state.hasMore;
   $('#mdt-history-position').textContent = state.incidents.length ? `SHOWING ${state.incidents.length} OF ${state.total} INCIDENT RECORDS` : '';
   $('#mdt-changes').textContent = String(state.changeCount);
-  for (const type of ['all', 'fire', 'ems', 'pd']) {
-    const count = type === 'all' ? state.incidents.length : state.incidents.filter((incident) => callTypeFor(incident) === type).length;
-    $(`#count-${type}`).textContent = String(count);
-  }
   if (!visible.length) {
-    stream.innerHTML = `<div class="stream-empty">${state.query ? 'NO MATCHING PUBLISHED INCIDENTS' : 'NO INCIDENT ENTRIES IN THIS VIEW'}</div>`;
+    stream.innerHTML = '<div class="stream-empty">NO INCIDENT ENTRIES IN THIS VIEW</div>';
     return;
   }
   let currentDay = '';
@@ -173,7 +154,6 @@ function render() {
       currentDay = day;
       markup.push(`<div class="stream-date-divider">${escapeHtml(day.toUpperCase())}</div>`);
     }
-    const typeMarkup = entry.type ? `<span class="entry-type ${escapeHtml(entry.type)}">${callTypeName(entry.type)}</span>` : '<span class="entry-type">UNCLASSIFIED</span>';
     const meta = [
       entry.location ? `<span class="entry-location"><strong>LOCATION</strong> ${escapeHtml(entry.location)}</span>` : '',
       entry.units.length ? `<span><strong>UNITS</strong> ${escapeHtml(entry.units.join(', '))}</span>` : '',
@@ -181,7 +161,7 @@ function render() {
       entry.previousLocation ? `<span><strong>PREVIOUS LOCATION</strong> ${escapeHtml(entry.previousLocation)}</span>` : ''
     ].filter(Boolean).join('');
     markup.push(`<article class="incident-entry ${entry.kind === 'update' ? 'entry-update' : ''}" data-entry-id="${escapeHtml(entry.id)}">
-      <div class="entry-topline"><time class="entry-time">${escapeHtml(formatStamp(entry.at))}</time><span class="entry-kind">${entry.kind === 'new' ? 'INCIDENT' : 'UPDATE'}</span>${typeMarkup}<span class="entry-source">${escapeHtml(entry.agency)} · ${escapeHtml(entry.borough)}</span><a class="entry-open" href="/incident/${encodeURIComponent(entry.incidentId)}">OPEN RECORD ↗</a></div>
+      <div class="entry-topline"><time class="entry-time">${escapeHtml(formatStamp(entry.at))}</time><span class="entry-kind">${entry.kind === 'new' ? 'INCIDENT' : 'UPDATE'}</span><span class="entry-source">${escapeHtml(entry.agency)} · ${escapeHtml(entry.borough)}</span><a class="entry-open" href="/incident/${encodeURIComponent(entry.incidentId)}">OPEN RECORD ↗</a></div>
       <h2 class="entry-title">${escapeHtml(entry.title)}</h2><p class="entry-summary">${escapeHtml(entry.summary)}</p>
       ${meta ? `<div class="entry-details">${meta}</div>` : ''}</article>`);
   }
@@ -197,19 +177,21 @@ async function loadOlderIncidents(event) {
 }
 
 function connectEvents() {
-  if (!('EventSource' in window)) {
-    setConnection(false);
-    return;
-  }
+  if (!('EventSource' in window)) return;
   const events = new EventSource('/api/events');
   state.eventSource = events;
-  events.addEventListener('open', () => setConnection(true));
-  events.addEventListener('error', () => setConnection(false));
+  // EventSource can reconnect independently; the incident API response determines feed status.
   events.addEventListener('incidents-updated', () => { void loadIncidents({ announce: true }); });
 }
 
 function wireControls() {
   $('#mdt-load-older').addEventListener('click', loadOlderIncidents);
+  $('#mdt-zoom').addEventListener('click', () => $('#mdt-workspace').classList.toggle('zoomed'));
+  $('#mdt-prev-entry').addEventListener('click', () => $('#incident-stream').scrollBy({ top: -$('#incident-stream').clientHeight, behavior: 'smooth' }));
+  $('#mdt-clear-screen').addEventListener('click', () => {
+    $('#incident-stream').replaceChildren();
+    $('#mdt-load-older').hidden = true;
+  });
   $$('[data-view]').forEach((button) => button.addEventListener('click', () => {
     state.view = button.dataset.view;
     $$('[data-view]').forEach((item) => {
@@ -219,40 +201,11 @@ function wireControls() {
     });
     render();
   }));
-  $$('[data-call-type]').forEach((button) => button.addEventListener('click', () => {
-    state.callType = button.dataset.callType;
-    $$('[data-call-type]').forEach((item) => {
-      const selected = item === button;
-      item.classList.toggle('active', selected);
-      item.setAttribute('aria-pressed', String(selected));
-    });
-    resetIncidentHistory();
-  }));
-  $('#mdt-borough').addEventListener('change', (event) => {
-    state.borough = event.target.value;
-    resetIncidentHistory();
-  });
-  $('#mdt-search').addEventListener('input', (event) => {
-    clearTimeout(state.searchTimer);
-    state.searchTimer = setTimeout(() => {
-      state.query = event.target.value.trim();
-      resetIncidentHistory();
-    }, 180);
-  });
   $('#mdt-refresh').addEventListener('click', () => { void loadIncidents({ announce: true }); });
   $('#incident-stream').addEventListener('scroll', (event) => {
     const element = event.currentTarget;
     state.following = element.scrollHeight - element.scrollTop - element.clientHeight < 60;
   });
-}
-
-function resetIncidentHistory() {
-  state.incidents = [];
-  state.nextOffset = 0;
-  state.total = 0;
-  state.hasMore = false;
-  state.lastSignature = '';
-  void loadIncidents();
 }
 
 wireControls();

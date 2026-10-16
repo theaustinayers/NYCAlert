@@ -47,6 +47,7 @@ const staticFiles = new Map<string, [string, string]>([
   ['/incident-popup.css', ['incident-popup.css', 'text/css; charset=utf-8']],
   ['/call-types.css', ['call-types.css', 'text/css; charset=utf-8']],
   ['/mdt.css', ['mdt.css', 'text/css; charset=utf-8']],
+  ['/mdt-emscad.css', ['mdt-emscad.css', 'text/css; charset=utf-8']],
   ['/mdt-retro.css', ['mdt-retro.css', 'text/css; charset=utf-8']],
   ['/mdt-pagination.css', ['mdt-pagination.css', 'text/css; charset=utf-8']],
   ['/mdt.js', ['mdt.js', 'text/javascript; charset=utf-8']],

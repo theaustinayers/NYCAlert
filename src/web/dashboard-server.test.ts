@@ -115,25 +115,24 @@ describe('DashboardServer account routes', () => {
       const response = await fetch(`${origin}/mdt`);
       assert.equal(response.status, 200);
       const html = await response.text();
-      assert.match(html, /INCIDENT OPERATIONS VIEW/);
-      assert.match(html, /SIMULATION · PUBLIC INCIDENT DATA/);
+      assert.match(html, /DISPATCH<br>INFO/);
+      assert.match(html, /PREMISE<br>INFO/);
+      assert.match(html, /COMMAND<br>HISTORY/);
       assert.match(html, /id="incident-stream"/);
       assert.match(html, /Copyright \(c\) 1989 - 2007/);
       assert.match(html, /Licensed to: City of New York Fire Department EMSCAD/);
       assert.match(html, /id="mdt-last-incident-age"/);
+      assert.doesNotMatch(html, /data-call-type=/);
       assert.match(html, /data-view="all"/);
       assert.match(html, /not an official FDNY system/);
       assert.match(html, /does not display Live Radio traffic, raw transcripts/);
       const stylesheet = await fetch(`${origin}/mdt.css`);
       assert.equal(stylesheet.status, 200);
       assert.match(await stylesheet.text(), /\.incident-stream/);
-      const retroStyles = await fetch(`${origin}/mdt-retro.css`);
-      assert.equal(retroStyles.status, 200);
-      assert.match(await retroStyles.text(), /background:#030605/);
-      const paginationStyles = await fetch(`${origin}/mdt-pagination.css`);
-      assert.equal(paginationStyles.status, 200);
-      assert.match(await paginationStyles.text(), /\.stream-pagination/);
-      const script = await fetch(`${origin}/mdt.js?v=mdt-retro-20261015-2`);
+      const emscadStyles = await fetch(`${origin}/mdt-emscad.css`);
+      assert.equal(emscadStyles.status, 200);
+      assert.match(await emscadStyles.text(), /grid-template-columns:1\.3fr/);
+      const script = await fetch(`${origin}/mdt.js?v=mdt-emscad-20261015-1`);
       assert.equal(script.status, 200);
       const source = await script.text();
       assert.match(source, /incidents-updated/);
@@ -142,6 +141,8 @@ describe('DashboardServer account routes', () => {
       assert.match(source, /refreshLatestIncident/);
       assert.match(source, /Math\.random\(\) \* 2001/);
       assert.match(source, /if \(!state\.started\) return/);
+      assert.doesNotMatch(source, /OFFLINE|LIVE CONNECTION/);
+      assert.doesNotMatch(source, /data-call-type/);
       assert.match(source, /loadOlderIncidents/);
       assert.doesNotMatch(source, /\/api\/live-calls/);
     } finally { await server.stop(); }
@@ -164,13 +165,17 @@ describe('DashboardServer account routes', () => {
       assert.match(homeHtml, /id="incident-popup-enabled"/);
       assert.match(homeHtml, /id="incident-arrival-ack"/);
       assert.match(homeHtml, /id="incident-arrival-scrim"/);
-      assert.match(homeHtml, /data-call-type="ems"/);
+      assert.doesNotMatch(homeHtml, /id="call-type-filters"|data-call-type=/);
       assert.doesNotMatch(homeHtml, /MONITORING · AI-SELECTED SUMMARIES ONLY/);
       assert.match(homeHtml, /href="https:\/\/buymeacoffee\.com\/nycalert"[^>]*aria-label="Donate to NYC Alert on Buy Me a Coffee"/);
       assert.match(homeHtml, /SUPPORT NYC ALERT<\/span><strong>Donate<\/strong><span class="stat-caption">BUY ME A COFFEE/);
       assert.doesNotMatch(homeHtml, /ACTIVE AGENCIES/);
       assert.match(homeHtml, /DISCORD COMMUNITY<\/span><strong>1,800\+<\/strong>/);
       assert.doesNotMatch(homeHtml, /class="listen-link"|LISTEN ↗/);
+      const dashboardScript = await fetch(`${origin}/app.js?v=dashboard-no-call-type-filters`);
+      assert.equal(dashboardScript.status, 200);
+      const dashboardSource = await dashboardScript.text();
+      assert.doesNotMatch(dashboardSource, /callTypeFilter|initializeCallTypeFilters/);
       const page = await fetch(`${origin}/admin`);
       assert.equal(page.status, 200);
       const html = await page.text();
@@ -194,7 +199,9 @@ describe('DashboardServer account routes', () => {
       assert.match(await callTypeStyles.text(), /call-type-filter/);
       const webhookStyles = await fetch(`${origin}/webhooks.css`);
       assert.equal(webhookStyles.status, 200);
-      assert.match(await webhookStyles.text(), /\.webhook-manager/);
+      const webhookStylesText = await webhookStyles.text();
+      assert.match(webhookStylesText, /\.webhook-manager/);
+      assert.match(webhookStylesText, /\.webhook-manager\[hidden\]\{display:none!important\}/);
     } finally { await server.stop(); }
   });
 
